@@ -650,14 +650,7 @@
                     initUserMap(office.lat, office.lng, office.rad);
 
                     const historyDiv = document.getElementById('userHistory');
-                    // Hanya kumpulkan tanggal izin yang DISETUJUI untuk menyembunyikan absen di hari itu
-                    const attItems = (res.history || []).map(h => ({
-                        type:   'absen',
-                        tgl:    h[2] || '',
-                        jamIn:  h[3] || '',
-                        jamOut: h[4] || '',
-                        status: h[9] || 'Hadir'
-                    }));
+
                     const izinItems = (res.userPermits || []).map(p => ({
                         type:       'izin',
                         tgl:        p[3] || '',
@@ -665,6 +658,29 @@
                         alasan:     p[5] || '',
                         statusIzin: p[7] || 'Menunggu'
                     }));
+
+                    // FIX: implementasi sesuai niat komentar lama — kumpulkan
+                    // tanggal yang izinnya sudah DISETUJUI, supaya entri absen
+                    // di tanggal yang sama disembunyikan dari riwayat. Sebelumnya
+                    // komentar ini ada tapi tidak pernah benar-benar dijalankan,
+                    // jadi kartu "Hadir/Tidak Hadir" dan kartu "Izin Disetujui"
+                    // bisa muncul berdampingan di tanggal yang sama (membingungkan).
+                    // Izin yang masih Menunggu/Ditolak TIDAK menyembunyikan absen,
+                    // karena belum ada penggantian status resmi untuk hari itu.
+                    const tglIzinDisetujui = new Set(
+                        izinItems.filter(p => p.statusIzin === 'Disetujui').map(p => p.tgl)
+                    );
+
+                    const attItems = (res.history || [])
+                        .filter(h => !tglIzinDisetujui.has(h[2] || ''))
+                        .map(h => ({
+                            type:   'absen',
+                            tgl:    h[2] || '',
+                            jamIn:  h[3] || '',
+                            jamOut: h[4] || '',
+                            status: h[9] || 'Hadir'
+                        }));
+
                     const combined = [...attItems, ...izinItems]
                         .sort((a, b) => (b.tgl > a.tgl ? 1 : b.tgl < a.tgl ? -1 : 0));
 
