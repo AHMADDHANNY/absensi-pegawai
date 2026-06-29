@@ -523,19 +523,24 @@ function closeLogoutModal() {
            KAMERA & SELFIE
         ============================================================= */
         function handleAttendanceClick(type, event) {
+    event.preventDefault(); // cegah default dulu di semua kasus
+
     attType = type;
     localStorage.setItem('_attType', type);
-    const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
-    if (dist > office.rad) {
-        event.preventDefault();
-        return showToast("Gagal: Anda berada di luar radius kantor!");
+
+    // Guard: skip cek radius jika GPS belum siap
+    if (currentLoc.lat !== 0 || currentLoc.lng !== 0) {
+        const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
+        if (dist > office.rad) {
+            return showToast("Gagal: Anda berada di luar radius kantor!");
+        }
     }
+
     if (window.AppInventor) {
-        event.preventDefault();
         window.AppInventor.setWebViewString("openCamera");
         return;
     }
-    event.preventDefault();
+
     var inputId = (type === 'IN') ? 'cameraInputMasuk' : 'cameraInputKeluar';
     document.getElementById(inputId).click();
 }
@@ -878,9 +883,10 @@ function closeLogoutModal() {
 // base64Data = string base64 MURNI (tanpa prefix data:image)
 // Pakai window. agar accessible dari EvaluateJS Kodular
     function receivePhoto(base64Data) {
-    if (!attType) attType = localStorage.getItem('_attType') || 'IN';
-    localStorage.removeItem('_attType');
-
+    if (!attType) {
+        attType = localStorage.getItem('_attType') || 'IN';
+    }
+    
     if (_permitMode) {
         _permitMode = false;
         document.getElementById('pFileData').value = base64Data;
@@ -959,7 +965,8 @@ function _sendWithRetry(dataUrl, attempt) {
         }
 
         function updateGPSUI() {
-            if (!office.lat) return;
+    if (!office.lat || !office.lng) return; // ← TAMBAH INI
+    if (currentLoc.lat === 0 && currentLoc.lng === 0) return;
             const dist     = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
             const el       = document.getElementById('gpsStatus');
             const distInfo = document.getElementById('distInfo');
@@ -1324,13 +1331,12 @@ function renderAdminIzin(data) {
         // Polling WebViewString dari Kodular
         var _processingPhoto = false;
 setInterval(function() {
-    if (!window.AppInventor || _processingPhoto) return;
-    var str = window.AppInventor.getWebViewString();
-    if (str && str !== 'openCamera' && str.length > 100) {
-        _processingPhoto = true;
-        window.AppInventor.setWebViewString('');
-        receivePhoto(str);
-        setTimeout(function() { _processingPhoto = false; }, 5000);
+    if (window.AppInventor) {
+        var str = window.AppInventor.getWebViewString();
+        if (str && str !== 'openCamera' && str.length > 100) {
+            window.AppInventor.setWebViewString(''); // ← reset dulu
+            receivePhoto(str); // ← baru proses
+        }
     }
 }, 500);
 
