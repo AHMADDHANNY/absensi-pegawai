@@ -518,78 +518,149 @@ function _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal) {
            FIX: btn.disabled = true agar tidak bisa double-klik
         ============================================================= */
         function handleLogin() {
-            const phone = document.getElementById('loginPhone').value.trim();
-            const pass  = document.getElementById('loginPass').value;
-            const btn   = document.getElementById('btnLogin');
+    const phone = document.getElementById('loginPhone').value.trim();
+    const pass  = document.getElementById('loginPass').value.trim(); // trim() tambahan untuk Kodular
+    const btn   = document.getElementById('btnLogin');
 
-            if (!phone || !pass) return showToast("Harap isi semua bidang!");
-            if (btn.disabled) return; // FIX: cegah Enter dobel saat sudah proses
+    if (!phone || !pass) return showToast("Harap isi semua bidang!");
 
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
-            btn.disabled  = true; // FIX: cegah double submit
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
+    btn.disabled  = true;
 
-            google.script.run
-                .withSuccessHandler(res => {
-                    if (res && res.success) {
-                        user = res.user;
-                        localStorage.setItem('presensi_user_v3', JSON.stringify(user));
-                        setupApp();
+    google.script.run
+        .withSuccessHandler(res => {
+            if (res && res.success) {
+                user = res.user;
+                localStorage.setItem('presensi_user_v3', JSON.stringify(user));
+                setupApp();
+            } else {
+                showToast(res ? res.message : "Terjadi kesalahan server");
+                btn.innerHTML = 'MASUK SEKARANG';
+                btn.disabled  = false;
+            }
+        })
+        .withFailureHandler(err => {
+            showToast("Gagal terhubung ke server");
+            btn.innerHTML = 'MASUK SEKARANG';
+            btn.disabled  = false;
+        })
+        .checkLogin(phone, pass);
+}
+
+function refreshData() {
+    if (!user) return;
+    document.getElementById('refreshIcon')?.classList.add('spinning');
+    google.script.run
+        .withSuccessHandler(res => {
+            document.getElementById('refreshIcon')?.classList.remove('spinning');
+
+            // ── CEK SESI TIDAK VALID ──────────────────────────────────
+            if (res && res.invalidSession) {
+                showToast("Sesi berakhir. Silakan login kembali.");
+                localStorage.removeItem('presensi_user_v3');
+                user = null;
+                // Reset state & paksa logout
+                userMap = null; adminMap = null;
+                hasInitialGPSFix = false;
+                document.getElementById('user-map').innerHTML = '';
+                document.getElementById('loginPhone').value = '';
+                document.getElementById('loginPass').value  = '';
+                document.getElementById('btnLogin').innerHTML = 'MASUK SEKARANG';
+                document.getElementById('btnLogin').disabled  = false;
+                document.getElementById('nav-setting').classList.add('hidden');
+                document.getElementById('nav-pegawai').classList.add('hidden');
+                document.getElementById('nav-log').classList.add('hidden');
+                document.getElementById('nav-izin').classList.add('hidden');
+                switchTab('home');
+                document.getElementById('app').classList.add('hidden');
+                document.getElementById('loginScreen').classList.remove('hidden');
+                return;
+            }
+            // ── AKHIR CEK SESI ────────────────────────────────────────
+
+            if (!res || res.error) {
+                console.warn('refreshData error:', res && res.error);
+                if (res && res.error) showToast('Server error: ' + res.error);
+                initUserMap(office.lat, office.lng, office.rad);
+                updateGPSUI();
+                return;
+            }
+
+            if (res.settings) {
+                const s         = res.settings;
+                const rawLat    = s.office_lat || s.officelat || s.lat;
+                const rawLng    = s.office_lng || s.officelng || s.lng;
+                const rawRad    = s.radius     || s.rad;
+                const parsedLat = parseFloat(rawLat);
+                const parsedLng = parseFloat(rawLng);
+                if (rawLat && rawLng && Math.abs(parsedLat) <= 90 && Math.abs(parsedLng) <= 180) {
+                    office = { lat: parsedLat, lng: parsedLng, rad: parseInt(rawRad) || 100 };
+                    localStorage.setItem('presensi_office_v3', JSON.stringify(office));
+                }
+            }
+
+            initUserMap(office.lat, office.lng, office.rad);
+
+            const historyDiv = document.getElementById('userHistory');
+            const attItems = (res.history || []).map(h => ({
+                type: 'absen', tgl: h[2] || '', jamIn: h[3] || '',
+                jamOut: h[4] || '', status: h[9] || 'Hadir'
+            }));
+            const izinItems = (res.userPermits || []).map(p => ({
+                type: 'izin', tgl: p[3] || '', jenisIzin: p[4] || 'Izin',
+                alasan: p[5] || '', statusIzin: p[7] || 'Menunggu'
+            }));
+            const combined = [...attItems, ...izinItems]
+                .sort((a, b) => (b.tgl > a.tgl ? 1 : b.tgl < a.tgl ? -1 : 0));
+
+            if (combined.length > 0) {
+                historyDiv.innerHTML = combined.map(item => {
+                    if (item.type === 'absen') {
+                        return `<div class="bg-white p-4 rounded-2xl border border-gray-100 flex justify-between items-center shadow-sm">
+                            <div class="flex items-center gap-3">
+                                <div class="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 flex-shrink-0">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 11c2.21 0 4-1.79 4-4S14.21 3 12 3 8 4.79 8 7s1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] font-black text-indigo-600">${esc(item.tgl)}</p>
+                                    <h4 class="font-bold text-gray-900 text-xs">${esc(item.jamIn)} – ${esc(item.jamOut || '--:--')}</h4>
+                                </div>
+                            </div>
+                            <span class="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[9px] font-bold">${esc(item.status)}</span>
+                        </div>`;
                     } else {
-                        showToast(res ? res.message : "Terjadi kesalahan server");
-                        btn.innerHTML = 'MASUK SEKARANG';
-                        btn.disabled  = false;
+                        const sc = item.statusIzin === 'Disetujui' ? 'bg-emerald-50 text-emerald-600'
+                            : item.statusIzin === 'Ditolak' ? 'bg-red-50 text-red-500'
+                            : 'bg-amber-50 text-amber-600';
+                        return `<div class="bg-white p-4 rounded-2xl border border-gray-100 flex justify-between items-center shadow-sm">
+                            <div class="flex items-center gap-3">
+                                <div class="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500 flex-shrink-0">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] font-black text-amber-500">${esc(item.tgl)} • ${esc(item.jenisIzin)}</p>
+                                    <h4 class="font-bold text-gray-900 text-xs truncate max-w-[160px]">${esc(item.alasan)}</h4>
+                                </div>
+                            </div>
+                            <span class="px-3 py-1 rounded-lg text-[9px] font-bold ${sc}">${esc(item.statusIzin)}</span>
+                        </div>`;
                     }
-                })
-                .withFailureHandler(err => {
-                    showToast("Gagal terhubung ke server");
-                    btn.innerHTML = 'MASUK SEKARANG';
-                    btn.disabled  = false;
-                })
-                .checkLogin(phone, pass);
-        }
+                }).join('');
+            } else {
+                historyDiv.innerHTML = '<p class="text-center text-xs py-4 text-gray-400">Belum ada riwayat</p>';
+            }
 
-        // FIX: listener Enter dipindah ke dalam window.onload (lihat atas).
-        // window.addEventListener('load', ...) yang lama dihapus karena
-        // berisiko race condition dengan window.onload di iframe GAS.
-
-        function handleLogout() {
-            if (!confirm('Yakin ingin keluar?')) return;
-            localStorage.removeItem('presensi_user_v3');
-
-            // FIX: location.reload() di dalam iframe sandbox Google Apps Script
-            // web app sering gagal memuat ulang HTML dari server dan malah
-            // menghasilkan halaman blank putih. Solusinya: reset state
-            // secara manual tanpa reload browser sama sekali.
-            user = null;
-
-            userMap = null;
-            adminMap = null;
-            userPosMarker = null;
-            userOfficeCircle = null;
-            userOfficeMarker = null;
-            adminMarker = null;
-            adminCircle = null;
-            hasInitialGPSFix = false;
-            const mc = document.getElementById('user-map');
-            if (mc) mc.innerHTML = '';
-
-            // Reset form login
-            document.getElementById('loginPhone').value = '';
-            document.getElementById('loginPass').value  = '';
-            document.getElementById('btnLogin').innerHTML = 'MASUK SEKARANG';
-            document.getElementById('btnLogin').disabled  = false;
-
-            // Sembunyikan menu admin lagi
-            document.getElementById('nav-setting').classList.add('hidden');
-            document.getElementById('nav-pegawai').classList.add('hidden');
-            document.getElementById('nav-log').classList.add('hidden');
-            document.getElementById('nav-izin').classList.add('hidden');
-
-            // Balik ke tab home & tampilkan layar login
-            switchTab('home');
-            document.getElementById('app').classList.add('hidden');
-            document.getElementById('loginScreen').classList.remove('hidden');
-        }
+            if (user.role === 'admin') renderAdmin(res);
+            updateGPSUI();
+        })
+        .withFailureHandler(err => {
+            document.getElementById('refreshIcon')?.classList.remove('spinning');
+            console.error('refreshData GAGAL:', err);
+            showToast("Gagal memuat data dari server");
+            initUserMap(office.lat, office.lng, office.rad);
+        })
+        .getDashboardData(user.id, user.role);
+}
 
         /* =============================================================
            KAMERA & SELFIE
