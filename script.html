@@ -875,49 +875,82 @@ function closeLogoutModal() {
             }
         }
 
-        function receivePhoto(base64Data) {
-            if (_permitMode) {
-                _permitMode = false;
-                document.getElementById('pFileData').value = base64Data;
-                document.getElementById('pFileName').value = 'foto_izin.jpg';
-                document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
-                return;
-            }
-            showToast("📷 Foto diterima, memproses...");
-            var dataUrl = 'data:image/jpeg;base64,' + base64Data;
-            var can = document.getElementById('canvas');
-            can.width = 640;
-            can.height = 480;
-            var img = new Image();
-            img.onload = function() {
-                var maxW = 480;
-                var scale = (img.width > maxW) ? maxW / img.width : 1;
-                can.width = img.width * scale;
-                can.height = img.height * scale;
-                can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
-                var dataUrl2 = can.toDataURL('image/jpeg', 0.4);
-                showToast("📤 Mengirim absensi... mohon tunggu");
-                var timeoutId = setTimeout(function() {
-                    showToast("⏱ Server lambat merespons. Cek riwayat absensi Anda.");
-                }, 35000);
-                google.script.run
-                    .withSuccessHandler(function(res) {
-                        clearTimeout(timeoutId);
-                        showToast(res.message);
-                        if (res.success) refreshData();
-                    })
-                    .withFailureHandler(function(err) {
-                        clearTimeout(timeoutId);
-                        showToast("Gagal kirim absensi. Coba lagi.");
-                        console.error("submitAttendance error:", err);
-                    })
-                    .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl2);
-            };
-            img.onerror = function() {
-                showToast("Gagal memuat foto, coba lagi.");
-            };
-            img.src = dataUrl;
+        // ── TERIMA FOTO DARI KODULAR (dipanggil via EvaluateJS) ──────────────
+// base64Data = string base64 MURNI (tanpa prefix data:image)
+// Pakai window. agar accessible dari EvaluateJS Kodular
+window.receivePhoto = function(base64Data) {
+    if (!base64Data || base64Data.length < 100) {
+        showToast("❌ Foto tidak valid, coba lagi.");
+        return;
+    }
+
+    // Bersihkan whitespace/newline yang kadang muncul dari Kodular
+    base64Data = base64Data.replace(/\s/g, '');
+
+    if (_permitMode) {
+        _permitMode = false;
+        document.getElementById('pFileData').value = base64Data;
+        document.getElementById('pFileName').value = 'foto_izin.jpg';
+        document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
+        return;
+    }
+
+    showToast("📷 Foto diterima, memproses...");
+
+    var img = new Image();
+    img.onload = function () {
+        var can  = document.getElementById('canvas');
+        var maxW = 400;
+        var scale = (img.width > maxW) ? maxW / img.width : 1;
+        can.width  = Math.round(img.width  * scale);
+        can.height = Math.round(img.height * scale);
+        can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
+        var compressed = can.toDataURL('image/jpeg', 0.35);
+
+        var sizeKB = Math.round(compressed.length * 0.75 / 1024);
+        if (sizeKB > 3000) {
+            showToast("⚠️ Foto terlalu besar (" + sizeKB + "KB), coba lagi.");
+            return;
         }
+
+        _sendWithRetry(compressed, 1);
+    };
+    img.onerror = function () { showToast("❌ Gagal memuat foto, coba lagi."); };
+    img.src = 'data:image/jpeg;base64,' + base64Data;
+};
+
+function _sendWithRetry(dataUrl, attempt) {
+    showToast("📤 Mengirim absensi... mohon tunggu");
+
+    var tid = setTimeout(function () {
+        showToast("⏱ Server lambat. Cek riwayat absensi Anda.");
+    }, 40000);
+
+    google.script.run
+        .withSuccessHandler(function (res) {
+            clearTimeout(tid);
+            showToast(res.message);
+            if (res.success) refreshData();
+        })
+        .withFailureHandler(function (err) {
+            clearTimeout(tid);
+            var e = err ? (err.message || String(err)) : '';
+            if (attempt < 3 && (e.indexOf('2501') !== -1 || e.indexOf('SSL') !== -1 || e.indexOf('connect') !== -1)) {
+                showToast("🔄 Koneksi gagal, mencoba ulang (" + attempt + "/2)...");
+                setTimeout(function () { _sendWithRetry(dataUrl, attempt + 1); }, 3000);
+            } else {
+                showToast("❌ Gagal kirim absensi. Coba lagi.");
+                console.error("submitAttendance error:", e);
+            }
+        })
+        .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl);
+}
+
+// HAPUS/GANTI setInterval polling lama di bawah dengan ini:
+// (tidak perlu polling lagi karena pakai EvaluateJS langsung)
+setInterval(function () {
+    // Kosongkan — polling tidak dipakai, EvaluateJS sudah cukup
+}, 99999);
 
         function initGPS() {
             if (navigator.geolocation) {
@@ -1352,15 +1385,6 @@ function renderAdminIzin(data) {
     receivePhoto(base64Data);
 }
 
-        // Metode 2: Fallback polling WebViewString
-        setInterval(function() {
-            if (window.AppInventor) {
-                var str = window.AppInventor.getWebViewString();
-                if (str && str !== 'openCamera' && str.length > 100) {
-                    window.AppInventor.setWebViewString('');
-                    receivePhoto(str);
-                }
-            }
-        }, 500);
+
 
     </script>
