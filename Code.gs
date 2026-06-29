@@ -521,7 +521,7 @@ function editUser(userData) {
     }
     return { success: false, message: 'ID pegawai tidak ditemukan.' };
   } catch (e) {
-    return { success: false, message: e.toString(); }
+    return { success: false, message: e.toString() }
   }
 }
 
