@@ -17,6 +17,10 @@
 
         /* =============================================================
            INIT
+           FIX: listener Enter pada password digabung ke dalam window.onload
+           (bukan window.addEventListener('load', ...) terpisah) supaya tidak
+           berisiko gagal terpasang kalau event 'load' sudah lebih dulu
+           terpicu sebelum script ini sempat dievaluasi di dalam iframe GAS.
         ============================================================= */
         window.onload = () => {
             startTime();
@@ -54,6 +58,14 @@
                     localStorage.removeItem('presensi_user_v3');
                 }
             }
+
+            // FIX: pindah dari window.addEventListener('load', ...) ke sini.
+            // Lebih aman karena dijamin jalan bersamaan dengan init lain,
+            // tidak tergantung urutan event listener tambahan.
+            const passField = document.getElementById('loginPass');
+            if (passField) passField.addEventListener('keydown', e => {
+                if (e.key === 'Enter') handleLogin();
+            });
         };
 
         /* =============================================================
@@ -100,6 +112,11 @@
 
         /* =============================================================
            NAVIGASI TAB
+           FIX: tab Izin sekarang menyesuaikan logika user vs admin.
+           Sebelumnya switchTab selalu memanggil loadAdminIzin() untuk tab
+           'izin', padahal user biasa juga punya akses ke tab ini (ajukan
+           izin), bukan hanya approval. Sekarang title & panel menyesuaikan
+           role: admin -> daftar approval, user -> form pengajuan saja.
         ============================================================= */
         function switchTab(id) {
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -117,7 +134,6 @@
                     initAdminMap(office.lat, office.lng, office.rad);
                 } else if (id === 'home') {
                     if (userMap) {
-                        userMap.invalidateSize();
                         centerMapOnUser();
                     } else {
                         initUserMap(office.lat, office.lng, office.rad);
@@ -127,7 +143,11 @@
                 } else if (id === 'log') {
                     loadAttendanceLog();
                 } else if (id === 'izin') {
-                    loadAdminIzin();
+                    // FIX: hanya admin yang load daftar approval.
+                    // User biasa tidak perlu fetch seluruh data izin orang lain.
+                    if (user && user.role === 'admin') {
+                        loadAdminIzin();
+                    }
                 }
             }, 500);
         }
@@ -142,6 +162,16 @@
             return d.innerHTML;
         }
 
+        /* FIX: escape khusus untuk dipakai di dalam atribut onclick='...'.
+           esc() di atas hanya meng-escape karakter HTML (&, <, >, ") tapi
+           TIDAK meng-escape kutip tunggal ('). Karena semua onclick di app
+           ini memakai kutip tunggal sebagai delimiter, nama/jabatan/dll yang
+           mengandung karakter ' bisa memutus attribute dan menyuntik HTML/JS
+           baru (XSS). escAttr() menambahkan escape \' di atas hasil esc(). */
+        function escAttr(str) {
+            return esc(str).replace(/'/g, '&#39;');
+        }
+
         /* =============================================================
            LOAD DATA PEGAWAI
         ============================================================= */
@@ -149,6 +179,7 @@
             try {
                 google.script.run
                     .withSuccessHandler(function (data) {
+                        _usersCache = data || []; // FIX: simpan ke cache global juga di sini
                         if (!data || !data.length) {
                             document.getElementById('adminUserTable').innerHTML =
                                 '<tr><td colspan="6" class="py-8 text-center text-gray-400 text-xs">Belum ada data pegawai</td></tr>';
@@ -169,8 +200,8 @@
                                 '<td class="py-3 px-3 text-gray-600">' + esc(u[3]) + '</td>' +
                                 '<td class="py-3 px-3 text-center"><span class="px-2 py-1 rounded-lg text-[9px] font-black uppercase ' + roleBadge + '">' + esc(u[4]) + '</span></td>' +
                                 '<td class="py-3 px-3 text-center"><div class="flex gap-1 justify-center">' +
-                                '<button onclick="loadAndEditUser(\'' + esc(u[0]) + '\')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center"><i class="fas fa-edit text-[10px]"></i></button>' +
-                                '<button onclick="deleteUserUI(\'' + esc(u[0]) + '\')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center"><i class="fas fa-trash text-[10px]"></i></button>' +
+                                '<button onclick="loadAndEditUser(\'' + escAttr(u[0]) + '\')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center"><i class="fas fa-edit text-[10px]"></i></button>' +
+                                '<button onclick="deleteUserUI(\'' + escAttr(u[0]) + '\')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center"><i class="fas fa-trash text-[10px]"></i></button>' +
                                 '</div></td></tr>';
                         }).join('');
                     })
@@ -187,6 +218,11 @@
         /* Simpan cache data pegawai untuk keperluan edit */
         var _usersCache = [];
 
+        /* FIX: satu-satunya jalur untuk membuka modal edit dari tabel
+           pegawai, baik dari loadPegawaiData() maupun renderAdmin().
+           Mengambil data mentah dari cache (bukan dari atribut onclick),
+           sehingga nama/jabatan yang berisi kutip tunggal tidak pernah
+           perlu di-inject langsung ke HTML attribute. */
         function loadAndEditUser(id) {
             if (_usersCache.length) {
                 var u = _usersCache.find(function (x) { return x[0] == id; });
@@ -197,6 +233,7 @@
                     _usersCache = data || [];
                     var u = _usersCache.find(function (x) { return x[0] == id; });
                     if (u) openUserModal(u[0], u[1], u[2], u[3], u[4]);
+                    else showToast('Data pegawai tidak ditemukan');
                 })
                 .withFailureHandler(function () { showToast('Gagal memuat data pegawai'); })
                 .getUsers();
@@ -239,7 +276,7 @@
                 // FIX: index eksplisit sesuai backend baru
                 // [10]photoIn [11]photoOut [12]mapsUrl [13]userName
                 var nama    = esc(a[13] || 'Anonim');
-                var mapsUrl = a[12] || '#';
+                var mapsUrl = esc(a[12] || '#');
                 var status  = a[9]  || 'Hadir';
 
                 var statusBadge = status === 'Hadir'
@@ -258,9 +295,26 @@
             }).join('');
         }
 
+        /* FIX: filterBulan dan filterTanggal sekarang saling reset otomatis.
+           Sebelumnya jika user mengisi filterBulan lalu mengisi filterTanggal,
+           keduanya tetap tersimpan di DOM dan applyLogFilter() mengutamakan
+           filterTanggal — tapi filterBulan tidak ikut dikosongkan di UI,
+           sehingga terlihat seperti dua filter aktif bersamaan (membingungkan)
+           padahal logikanya hanya satu yang dipakai. Sekarang field yang lain
+           langsung dikosongkan begitu salah satu filter diisi.
+        ============================================================= */
         function applyLogFilter() {
-            var filterBulan   = document.getElementById('filterBulan').value;
-            var filterTanggal = document.getElementById('filterTanggal').value;
+            var elBulan   = document.getElementById('filterBulan');
+            var elTanggal = document.getElementById('filterTanggal');
+            var filterBulan   = elBulan.value;
+            var filterTanggal = elTanggal.value;
+
+            // Jika tanggal spesifik dipilih, filter bulan tidak relevan lagi -> reset di UI
+            if (filterTanggal) {
+                elBulan.value = '';
+                filterBulan = '';
+            }
+
             var filtered = allLogData.filter(function (a) {
                 var tgl = a[2];
                 if (!tgl) return false;
@@ -271,6 +325,14 @@
             renderLogTable(filtered);
         }
 
+        // FIX: dipanggil dari onchange filterBulan agar filterTanggal ikut reset juga (dua arah)
+        function onFilterBulanChange() {
+            var elBulan   = document.getElementById('filterBulan');
+            var elTanggal = document.getElementById('filterTanggal');
+            if (elBulan.value) elTanggal.value = '';
+            applyLogFilter();
+        }
+
         function resetLogFilter() {
             document.getElementById('filterBulan').value   = '';
             document.getElementById('filterTanggal').value = '';
@@ -279,6 +341,10 @@
 
         /* =============================================================
            EXPORT PDF — pakai window.print() dengan CSS print khusus
+           FIX: tambah warning konfirmasi jika data > 500 baris, karena
+           window.print() dengan ribuan baris bisa membuat browser hang
+           atau render sangat lambat di device low-end (terutama WebView
+           Kodular). User diberi pilihan lanjut atau batal.
         ============================================================= */
         function exportPDF() {
             var filterBulan   = document.getElementById('filterBulan').value;
@@ -300,6 +366,18 @@
             if (!dataCetak.length) {
                 showToast('Tidak ada data untuk di-export!');
                 return;
+            }
+
+            // FIX: warning jika data terlalu banyak
+            var MAX_SAFE_EXPORT = 500;
+            if (dataCetak.length > MAX_SAFE_EXPORT) {
+                var lanjut = confirm(
+                    '⚠️ Data yang akan di-export ada ' + dataCetak.length + ' baris.\n' +
+                    'Export data sebanyak ini bisa membuat browser lambat atau macet,\n' +
+                    'terutama di HP. Disarankan filter per bulan/tanggal dulu.\n\n' +
+                    'Tetap lanjutkan export semua data ini?'
+                );
+                if (!lanjut) return;
             }
 
             // Hitung statistik
@@ -376,6 +454,7 @@
             const btn   = document.getElementById('btnLogin');
 
             if (!phone || !pass) return showToast("Harap isi semua bidang!");
+            if (btn.disabled) return; // FIX: cegah Enter dobel saat sudah proses
 
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
             btn.disabled  = true; // FIX: cegah double submit
@@ -400,14 +479,9 @@
                 .checkLogin(phone, pass);
         }
 
-        // Tekan Enter di field password langsung login
-        // FIX: pakai window load agar jalan di iframe GAS
-        window.addEventListener('load', () => {
-            const passField = document.getElementById('loginPass');
-            if (passField) passField.addEventListener('keydown', e => {
-                if (e.key === 'Enter') handleLogin();
-            });
-        });
+        // FIX: listener Enter dipindah ke dalam window.onload (lihat atas).
+        // window.addEventListener('load', ...) yang lama dihapus karena
+        // berisiko race condition dengan window.onload di iframe GAS.
 
         function handleLogout() {
             if (!confirm('Yakin ingin keluar?')) return;
@@ -524,20 +598,30 @@
             reader.readAsDataURL(file);
         }
 
-        function startAttendance(type) {
-            // legacy — tidak dipakai lagi
-        }
+        /* FIX: startAttendance() legacy dihapus sepenuhnya — sudah tidak
+           dipanggil di mana pun (digantikan handleAttendanceClick). */
 
         /* =============================================================
            FETCH DATA DASHBOARD
+           FIX: race condition — flag _isRefreshing mencegah refreshData()
+           dipanggil bertumpuk (misal user tap tombol refresh berkali-kali
+           dengan cepat, atau auto-refresh dan tap manual bersamaan), yang
+           sebelumnya bisa menyebabkan beberapa response saling menimpa
+           render DOM yang sama dengan urutan tidak terduga.
         ============================================================= */
+        var _isRefreshing = false;
+
         function refreshData() {
             if (!user) return;
+            if (_isRefreshing) return; // FIX: cegah request bertumpuk
+            _isRefreshing = true;
+
             document.getElementById('refreshIcon')?.classList.add('spinning');
             google.script.run
                 .withSuccessHandler(res => {
                   document.getElementById('refreshIcon')?.classList.remove('spinning');
-                  
+                  _isRefreshing = false; // FIX: reset flag setelah selesai
+
                     if (!res || res.error) {
                         console.warn('refreshData error:', res && res.error);
                         if (res && res.error) showToast('Server error: ' + res.error);
@@ -568,19 +652,19 @@
                     const historyDiv = document.getElementById('userHistory');
                     // Hanya kumpulkan tanggal izin yang DISETUJUI untuk menyembunyikan absen di hari itu
                     const attItems = (res.history || []).map(h => ({
-    type:   'absen',
-    tgl:    h[2] || '',
-    jamIn:  h[3] || '',
-    jamOut: h[4] || '',
-    status: h[9] || 'Hadir'
-}));
-const izinItems = (res.userPermits || []).map(p => ({
-    type:       'izin',
-    tgl:        p[3] || '',
-    jenisIzin:  p[4] || 'Izin',
-    alasan:     p[5] || '',
-    statusIzin: p[7] || 'Menunggu'
-}));
+                        type:   'absen',
+                        tgl:    h[2] || '',
+                        jamIn:  h[3] || '',
+                        jamOut: h[4] || '',
+                        status: h[9] || 'Hadir'
+                    }));
+                    const izinItems = (res.userPermits || []).map(p => ({
+                        type:       'izin',
+                        tgl:        p[3] || '',
+                        jenisIzin:  p[4] || 'Izin',
+                        alasan:     p[5] || '',
+                        statusIzin: p[7] || 'Menunggu'
+                    }));
                     const combined = [...attItems, ...izinItems]
                         .sort((a, b) => (b.tgl > a.tgl ? 1 : b.tgl < a.tgl ? -1 : 0));
 
@@ -630,6 +714,7 @@ const izinItems = (res.userPermits || []).map(p => ({
                 })
                 .withFailureHandler(err => {
                   document.getElementById('refreshIcon')?.classList.remove('spinning');
+                  _isRefreshing = false; // FIX: reset flag juga saat gagal
                     console.error('refreshData GAGAL:', err);
                     showToast("Gagal memuat data dari server");
                     initUserMap(office.lat, office.lng, office.rad);
@@ -684,21 +769,24 @@ const izinItems = (res.userPermits || []).map(p => ({
                         </td>
                         <td class="py-3 px-3 text-center">
                             <div class="flex gap-1 justify-center">
-                                <button onclick="openUserModal('${esc(u[0])}','${esc(u[1])}','${esc(u[2])}','${esc(u[3])}','${esc(u[4])}')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center hover:bg-indigo-100"><i class="fas fa-edit text-[10px]"></i></button>
-                                <button onclick="deleteUserUI('${esc(u[0])}')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center hover:bg-red-100"><i class="fas fa-trash text-[10px]"></i></button>
+                                <button onclick="loadAndEditUser('${escAttr(u[0])}')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center hover:bg-indigo-100"><i class="fas fa-edit text-[10px]"></i></button>
+                                <button onclick="deleteUserUI('${escAttr(u[0])}')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center hover:bg-red-100"><i class="fas fa-trash text-[10px]"></i></button>
                             </div>
                         </td>
                     </tr>
                 `).join('');
+                // FIX: openUserModal tidak lagi dipanggil langsung dengan data mentah
+                // di onclick (rawan rusak/inject jika ada karakter ' pada nama/jabatan).
+                // Sekarang pakai loadAndEditUser(id) yang ambil data dari cache _usersCache.
             }
 
             // FIX: allAttendance index baru
             if (res.allAttendance) {
                 document.getElementById('adminAbsenceLog').innerHTML = res.allAttendance.map(a => {
                     var userName = esc(a[13] || 'Anonim'); // FIX: index 13
-                    var mapsUrl  = a[12] || '#';            // FIX: index 12
-                    var photoIn  = a[10] || '';
-                    var photoOut = a[11] || '';
+                    var mapsUrl  = esc(a[12] || '#');       // FIX: index 12 + esc untuk href
+                    var photoIn  = esc(a[10] || '');
+                    var photoOut = esc(a[11] || '');
 
                     return `
                         <div class="bg-white p-4 rounded-2xl border border-gray-100 space-y-3 shadow-sm">
@@ -800,59 +888,60 @@ const izinItems = (res.userPermits || []).map(p => ({
 
         // Dipanggil dari Kodular native
         function receiveNativeLocation(lat, lng) {
-        currentLoc = { lat: parseFloat(lat), lng: parseFloat(lng) };
-        updateGPSUI();
-        updateUserMapLive();
-        if (!hasInitialGPSFix && userMap) {
-            hasInitialGPSFix = true;
-            centerMapOnUser();
+            currentLoc = { lat: parseFloat(lat), lng: parseFloat(lng) };
+            updateGPSUI();
+            updateUserMapLive();
+            if (!hasInitialGPSFix && userMap) {
+                hasInitialGPSFix = true;
+                centerMapOnUser();
+            }
         }
-      }
-      
-      function receivePhoto(base64Data) {
-    if (_permitMode) {
-        _permitMode = false;
-        document.getElementById('pFileData').value = base64Data;
-        document.getElementById('pFileName').value = 'foto_izin.jpg';
-        document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
-        return;
-    }
-    // kode absensi
-    showToast("📷 Foto diterima, memproses...");
-    var dataUrl = 'data:image/jpeg;base64,' + base64Data;
-    var can = document.getElementById('canvas');
-    can.width = 640;
-    can.height = 480;
-    var img = new Image();
-    img.onload = function() {
-        var maxW = 480;
-        var scale = (img.width > maxW) ? maxW / img.width : 1;
-        can.width = img.width * scale;
-        can.height = img.height * scale;
-        can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
-        var dataUrl2 = can.toDataURL('image/jpeg', 0.4);
-        showToast("📤 Mengirim absensi... mohon tunggu");
-        var timeoutId = setTimeout(function() {
-            showToast("⏱ Server lambat merespons. Cek riwayat absensi Anda.");
-        }, 35000);
-        google.script.run
-            .withSuccessHandler(function(res) {
-                clearTimeout(timeoutId);
-                showToast(res.message);
-                if (res.success) refreshData();
-            })
-            .withFailureHandler(function(err) {
-                clearTimeout(timeoutId);
-                showToast("Gagal kirim absensi. Coba lagi.");
-                console.error("submitAttendance error:", err);
-            })
-            .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl2);
-    };
-    img.onerror = function() {
-        showToast("Gagal memuat foto, coba lagi.");
-    };
-    img.src = dataUrl;
-}
+
+        function receivePhoto(base64Data) {
+            if (_permitMode) {
+                _permitMode = false;
+                document.getElementById('pFileData').value = base64Data;
+                document.getElementById('pFileName').value = 'foto_izin.jpg';
+                document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
+                return;
+            }
+            // kode absensi
+            showToast("📷 Foto diterima, memproses...");
+            var dataUrl = 'data:image/jpeg;base64,' + base64Data;
+            var can = document.getElementById('canvas');
+            can.width = 640;
+            can.height = 480;
+            var img = new Image();
+            img.onload = function() {
+                var maxW = 480;
+                var scale = (img.width > maxW) ? maxW / img.width : 1;
+                can.width = img.width * scale;
+                can.height = img.height * scale;
+                can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
+                var dataUrl2 = can.toDataURL('image/jpeg', 0.4);
+                showToast("📤 Mengirim absensi... mohon tunggu");
+                var timeoutId = setTimeout(function() {
+                    showToast("⏱ Server lambat merespons. Cek riwayat absensi Anda.");
+                }, 35000);
+                google.script.run
+                    .withSuccessHandler(function(res) {
+                        clearTimeout(timeoutId);
+                        showToast(res.message);
+                        if (res.success) refreshData();
+                    })
+                    .withFailureHandler(function(err) {
+                        clearTimeout(timeoutId);
+                        showToast("Gagal kirim absensi. Coba lagi.");
+                        console.error("submitAttendance error:", err);
+                    })
+                    .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl2);
+            };
+            img.onerror = function() {
+                showToast("Gagal memuat foto, coba lagi.");
+            };
+            img.src = dataUrl;
+        }
+
         function initGPS() {
             if (navigator.geolocation) {
                 navigator.geolocation.watchPosition(pos => {
@@ -920,7 +1009,6 @@ const izinItems = (res.userPermits || []).map(p => ({
             if (!mc) return;
             var dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
             var inRange = dist <= office.rad;
-            var pct = Math.min(100, Math.round((office.rad / Math.max(dist, 1)) * 100));
             var barW = Math.min(100, Math.round((office.rad / Math.max(dist, office.rad)) * 100));
 
             mc.innerHTML = `
@@ -1060,12 +1148,12 @@ const izinItems = (res.userPermits || []).map(p => ({
             }
             // Kolom Permits: [0]id [1]userId [2]nama [3]tgl [4]jenis [5]alasan [6]lampiran [7]status_app
             listEl.innerHTML = data.map(function(p) {
-                const id        = p[0];
+                const id        = esc(p[0]);
                 const nama      = esc(p[2] || 'Anonim');
                 const tgl       = esc(p[3] || '-');
                 const jenis     = esc(p[4] || '-');
                 const alasan    = esc(p[5] || '-');
-                const lampiran  = p[6] || '';
+                const lampiran  = esc(p[6] || '');
                 const status    = p[7] || 'Menunggu';
 
                 const scBadge = status === 'Disetujui'
@@ -1170,6 +1258,16 @@ const izinItems = (res.userPermits || []).map(p => ({
         function handleWebPermitPhoto(input) {
             if (!input.files || !input.files[0]) return;
             var file = input.files[0];
+
+            // FIX: validasi ukuran file maks 5MB sebelum dibaca/dikirim,
+            // sesuai catatan di komentar header yang sebelumnya belum diterapkan.
+            var MAX_BYTES = 5 * 1024 * 1024;
+            if (file.size > MAX_BYTES) {
+                showToast('Ukuran foto maks 5MB! Foto Anda ' + Math.round(file.size / 1024 / 1024 * 10) / 10 + 'MB');
+                input.value = '';
+                return;
+            }
+
             var reader = new FileReader();
             reader.onload = function(e) {
                 var base64 = e.target.result.split(',')[1];
@@ -1177,6 +1275,7 @@ const izinItems = (res.userPermits || []).map(p => ({
                 document.getElementById('pFileName').value = file.name || 'foto_izin.jpg';
                 document.getElementById('pFileLabel').innerText = '\u2705 Foto berhasil diambil';
             };
+            reader.onerror = function() { showToast('Gagal membaca foto.'); };
             reader.readAsDataURL(file);
         }
 
@@ -1260,15 +1359,19 @@ const izinItems = (res.userPermits || []).map(p => ({
             setTimeout(() => t.style.bottom = '-100px', 3000);
         }
 
-        // Polling WebViewString dari Kodular
-setInterval(function() {
-    if (window.AppInventor) {
-        var str = window.AppInventor.getWebViewString();
-        if (str && str !== 'openCamera' && str.length > 100) {
-            window.AppInventor.setWebViewString('');
-            receivePhoto(str);
-        }
-    }
-}, 500);
+        /* FIX: polling WebViewString Kodular diperlambat dari 500ms ke 1000ms
+           untuk mengurangi beban CPU/battery di WebView, dan dihentikan
+           otomatis saat tidak ada user login (tidak perlu polling terus saat
+           di layar login, karena openCamera/foto hanya relevan setelah login). */
+        setInterval(function() {
+            if (!user) return; // FIX: stop polling saat tidak ada user
+            if (window.AppInventor) {
+                var str = window.AppInventor.getWebViewString();
+                if (str && str !== 'openCamera' && str.length > 100) {
+                    window.AppInventor.setWebViewString('');
+                    receivePhoto(str);
+                }
+            }
+        }, 1000);
 
     </script>
