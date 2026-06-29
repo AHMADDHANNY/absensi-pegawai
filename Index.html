@@ -13,6 +13,12 @@
 
 <body class="safe-bottom">
 
+    <!-- [SARAN] Loading Overlay fullscreen -->
+    <div id="loadingOverlay">
+        <div class="spinner"></div>
+        <p>Memproses...</p>
+    </div>
+
     <!-- Screen: Login -->
     <div id="loginScreen" class="fixed inset-0 z-[600] bg-white p-8 flex flex-col justify-center items-center">
         <div class="w-full max-sm:max-w-xs space-y-8">
@@ -78,7 +84,6 @@
                 <p id="curDate" class="text-xs font-bold opacity-80 uppercase mb-1">...</p>
                 <h1 id="curTime" class="text-5xl font-black mb-8 tabular-nums">00:00</h1>
                 <div class="grid grid-cols-1 gap-3 relative z-10">
-                    <!-- ABSEN MASUK: label langsung trigger input (web), onclick untuk Kodular -->
                     <label for="cameraInputMasuk" onclick="handleAttendanceClick('IN', event)"
                         class="bg-white text-indigo-600 font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all cursor-pointer">
                         <i class="fas fa-camera"></i> ABSEN MASUK
@@ -103,18 +108,18 @@
             </div>
 
             <div>
-<div class="flex justify-between items-center mb-4 px-2">
-    <h3 class="font-black text-sm uppercase tracking-wider text-gray-400">Aktivitas Terakhir</h3>
-    <button id="refreshBtn" onclick="refreshData()"
-            class="text-indigo-600 text-xs font-bold">
-        <i id="refreshIcon" class="fas fa-sync-alt"></i> Refresh
-    </button>
-</div>
-    <div id="userHistory" class="space-y-3"></div>
-</div>
+                <div class="flex justify-between items-center mb-4 px-2">
+                    <h3 class="font-black text-sm uppercase tracking-wider text-gray-400">Aktivitas Terakhir</h3>
+                    <button id="refreshBtn" onclick="refreshData()"
+                            class="text-indigo-600 text-xs font-bold">
+                        <i id="refreshIcon" class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+                <div id="userHistory" class="space-y-3"></div>
+            </div>
         </main>
 
-        <!-- TAB: SETTING -->
+        <!-- TAB: SETTING (admin only) -->
         <main id="tab-setting" class="tab-content p-6 space-y-6">
             <h2 class="text-2xl font-black text-gray-900">Setting Kantor</h2>
             <div class="grid grid-cols-2 gap-3">
@@ -159,8 +164,9 @@
             </div>
         </main>
 
-        <!-- TAB: PEGAWAI -->
-        <main id="tab-pegawai" class="tab-content p-6 space-y-6 pb-24">
+        <!-- TAB: PEGAWAI (admin only) -->
+        <!-- [FIX] pb-24 → pb-28 agar konten tidak tertutup navbar -->
+        <main id="tab-pegawai" class="tab-content p-6 space-y-6 pb-28">
             <div class="flex justify-between items-center">
                 <h2 class="text-2xl font-black text-gray-900">Data Pegawai</h2>
                 <button onclick="openUserModal()"
@@ -193,7 +199,7 @@
             </div>
         </main>
 
-        <!-- TAB: LOG ABSENSI -->
+        <!-- TAB: LOG ABSENSI (admin only) -->
         <main id="tab-log" class="tab-content p-6 space-y-6">
             <div class="flex justify-between items-center">
                 <h2 class="text-2xl font-black text-gray-900">Log Absensi</h2>
@@ -224,14 +230,14 @@
                 <div class="grid grid-cols-2 gap-2">
                     <div>
                         <label class="text-[9px] font-bold text-gray-400 uppercase">Pilih Bulan</label>
+                        <!-- [FIX] filterBulan onchange tidak reset filterTanggal — dipindah ke script.html -->
                         <input type="month" id="filterBulan"
-                            onchange="document.getElementById('filterTanggal').value = ''; applyLogFilter()"
                             class="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 text-xs font-bold outline-none text-gray-600">
                     </div>
                     <div>
                         <label class="text-[9px] font-bold text-gray-400 uppercase">Pilih Tanggal</label>
+                        <!-- [FIX] filterTanggal onchange tidak reset filterBulan — dipindah ke script.html -->
                         <input type="date" id="filterTanggal"
-                            onchange="document.getElementById('filterBulan').value = ''; applyLogFilter()"
                             class="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 text-xs font-bold outline-none text-gray-600">
                     </div>
                 </div>
@@ -262,17 +268,19 @@
             </div>
         </main>
 
-        <!-- TAB: IZIN ADMIN -->
-        <main id="tab-izin" class="tab-content p-6 space-y-6 pb-24">
+        <!-- TAB: IZIN -->
+        <!-- [FIX] Tab izin sekarang tersedia untuk semua role (pegawai & admin) -->
+        <!-- [FIX] pb-24 → pb-28 agar konten tidak tertutup navbar -->
+        <main id="tab-izin" class="tab-content p-6 space-y-6 pb-28">
             <div class="flex justify-between items-center">
-                <h2 class="text-2xl font-black text-gray-900">Approval Izin</h2>
+                <h2 class="text-2xl font-black text-gray-900" id="izinTabTitle">Izin Saya</h2>
                 <span id="izinPendingBadge" class="bg-amber-100 text-amber-700 text-[10px] font-black px-3 py-1.5 rounded-xl hidden">
                     <i class="fas fa-clock mr-1"></i> <span id="izinPendingCount">0</span> Menunggu
                 </span>
             </div>
 
-            <!-- Filter -->
-            <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+            <!-- Filter (hanya tampil untuk admin) -->
+            <div id="izinFilterPanel" class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3 hidden">
                 <div class="flex items-center justify-between">
                     <h3 class="font-black text-sm uppercase text-gray-400">Filter</h3>
                     <button onclick="resetIzinFilter()" class="text-[10px] font-bold text-red-400 underline">Reset</button>
@@ -309,23 +317,25 @@
                 <i class="fas fa-house text-lg"></i>
                 <span class="text-[8px] font-bold uppercase">Home</span>
             </button>
+            <!-- Admin only tabs -->
             <button onclick="switchTab('setting')" id="nav-setting"
-                class="hidden flex flex-col items-center gap-1 text-gray-400 transition-all">
+                class="hidden flex-col items-center gap-1 text-gray-400 transition-all">
                 <i class="fas fa-gear text-lg"></i>
                 <span class="text-[8px] font-bold uppercase">Setting</span>
             </button>
             <button onclick="switchTab('pegawai')" id="nav-pegawai"
-                class="hidden flex flex-col items-center gap-1 text-gray-400 transition-all">
+                class="hidden flex-col items-center gap-1 text-gray-400 transition-all">
                 <i class="fas fa-users text-lg"></i>
                 <span class="text-[8px] font-bold uppercase">Pegawai</span>
             </button>
             <button onclick="switchTab('log')" id="nav-log"
-                class="hidden flex flex-col items-center gap-1 text-gray-400 transition-all">
+                class="hidden flex-col items-center gap-1 text-gray-400 transition-all">
                 <i class="fas fa-clock-rotate-left text-lg"></i>
                 <span class="text-[8px] font-bold uppercase">Log</span>
             </button>
+            <!-- [FIX] Tab Izin sekarang tampil untuk SEMUA role, bukan hanya admin -->
             <button onclick="switchTab('izin')" id="nav-izin"
-                class="hidden flex flex-col items-center gap-1 text-gray-400 transition-all">
+                class="flex flex-col items-center gap-1 text-gray-400 transition-all">
                 <i class="fas fa-file-circle-check text-lg"></i>
                 <span class="text-[8px] font-bold uppercase">Izin</span>
             </button>
@@ -337,9 +347,11 @@
     </div>
 
     <!-- MODAL: CRUD PEGAWAI -->
+    <!-- [FIX] Klik backdrop (area luar modal) menutup modal -->
     <div id="userModal"
-        class="fixed inset-0 z-[700] bg-black/60 backdrop-blur-sm hidden items-center justify-center p-6">
-        <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 space-y-4 shadow-2xl">
+        class="fixed inset-0 z-[700] bg-black/60 backdrop-blur-sm hidden items-center justify-center p-6"
+        onclick="handleModalBackdropClick(event, 'userModal')">
+        <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 space-y-4 shadow-2xl" onclick="event.stopPropagation()">
             <h3 id="modalTitle" class="text-xl font-black text-gray-900">Data Pegawai</h3>
             <input type="hidden" id="editId">
             <input type="text" id="uNama" placeholder="Nama Lengkap"
@@ -365,9 +377,11 @@
     </div>
 
     <!-- MODAL: PENGAJUAN IZIN -->
+    <!-- [FIX] Klik backdrop menutup modal -->
     <div id="permitModal"
-        class="fixed inset-0 z-[700] bg-black/60 backdrop-blur-sm hidden items-center justify-center p-6">
-        <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 space-y-4 shadow-2xl">
+        class="fixed inset-0 z-[700] bg-black/60 backdrop-blur-sm hidden items-center justify-center p-6"
+        onclick="handleModalBackdropClick(event, 'permitModal')">
+        <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 space-y-4 shadow-2xl" onclick="event.stopPropagation()">
             <h3 class="text-xl font-black text-gray-900">Pengajuan Izin</h3>
             <select id="pType"
                 class="w-full p-4 bg-gray-50 rounded-2xl outline-none ring-1 ring-gray-100 font-bold text-gray-700">
@@ -383,14 +397,14 @@
                 <label class="text-[10px] font-bold text-gray-400 uppercase ml-2 mb-1 block">
                     Lampiran (Foto Surat Dokter dll) — Maks 5MB
                 </label>
-                <div id="pFileArea" onclick="triggerPermitPhoto()" 
-    class="w-full p-4 bg-gray-50 rounded-2xl ring-1 ring-gray-100 text-center cursor-pointer">
-    <p id="pFileLabel" class="text-xs font-bold text-indigo-600">📷 Tap untuk ambil foto</p>
-</div>
-<input type="hidden" id="pFileData" value="">
-<input type="hidden" id="pFileName" value="">
-<input type="file" id="pFileCameraWeb" accept="image/*" capture="environment" class="hidden"
-    onchange="handleWebPermitPhoto(this)">
+                <div id="pFileArea" onclick="triggerPermitPhoto()"
+                    class="w-full p-4 bg-gray-50 rounded-2xl ring-1 ring-gray-100 text-center cursor-pointer">
+                    <p id="pFileLabel" class="text-xs font-bold text-indigo-600">📷 Tap untuk ambil foto</p>
+                </div>
+                <input type="hidden" id="pFileData" value="">
+                <input type="hidden" id="pFileName" value="">
+                <input type="file" id="pFileCameraWeb" accept="image/*" capture="environment" class="hidden"
+                    onchange="handleWebPermitPhoto(this)">
             </div>
             <div class="flex gap-3 pt-4">
                 <button onclick="closePermitModal()" class="flex-1 py-4 font-bold text-gray-400">Batal</button>
