@@ -944,13 +944,7 @@ function _sendWithRetry(dataUrl, attempt) {
             }
         })
         .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl);
-}
-
-// HAPUS/GANTI setInterval polling lama di bawah dengan ini:
-// (tidak perlu polling lagi karena pakai EvaluateJS langsung)
-setInterval(function () {
-    // Kosongkan — polling tidak dipakai, EvaluateJS sudah cukup
-}, 99999);
+};
 
         function initGPS() {
             if (navigator.geolocation) {
