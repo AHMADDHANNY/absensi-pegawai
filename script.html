@@ -17,21 +17,11 @@
 
         /* =============================================================
            INIT
-           FIX: listener Enter pada password digabung ke dalam window.onload
-           (bukan window.addEventListener('load', ...) terpisah) supaya tidak
-           berisiko gagal terpasang kalau event 'load' sudah lebih dulu
-           terpicu sebelum script ini sempat dievaluasi di dalam iframe GAS.
         ============================================================= */
         window.onload = () => {
             startTime();
             initGPS();
 
-            // FIX: localStorage bisa menyimpan cache office dari sesi lama yang
-            // sudah salah skala (misal dari sebelum bug normalisasi koordinat
-            // diperbaiki di backend). Cache yang di luar rentang valid
-            // (lat -90..90, lng -180..180) sekarang dibuang, bukan dipakai,
-            // supaya tidak terus "menular" ke peta dan form setiap kali halaman
-            // dibuka ulang.
             const cachedOffice = localStorage.getItem('presensi_office_v3');
             if (cachedOffice) {
                 try {
@@ -58,14 +48,6 @@
                     localStorage.removeItem('presensi_user_v3');
                 }
             }
-
-            // FIX: pindah dari window.addEventListener('load', ...) ke sini.
-            // Lebih aman karena dijamin jalan bersamaan dengan init lain,
-            // tidak tergantung urutan event listener tambahan.
-            const passField = document.getElementById('loginPass');
-            if (passField) passField.addEventListener('keydown', e => {
-                if (e.key === 'Enter') handleLogin();
-            });
         };
 
         /* =============================================================
@@ -91,8 +73,6 @@
             try {
                 google.script.run
                     .withSuccessHandler(loc => {
-                        // FIX: validasi rentang sebelum dipakai, sebagai lapis
-                        // pengaman tambahan terhadap data salah skala.
                         if (loc && loc.lat && loc.lng && !loc.error &&
                             Math.abs(loc.lat) <= 90 && Math.abs(loc.lng) <= 180) {
                             office = { lat: loc.lat, lng: loc.lng, rad: loc.rad || 100 };
@@ -112,11 +92,6 @@
 
         /* =============================================================
            NAVIGASI TAB
-           FIX: tab Izin sekarang menyesuaikan logika user vs admin.
-           Sebelumnya switchTab selalu memanggil loadAdminIzin() untuk tab
-           'izin', padahal user biasa juga punya akses ke tab ini (ajukan
-           izin), bukan hanya approval. Sekarang title & panel menyesuaikan
-           role: admin -> daftar approval, user -> form pengajuan saja.
         ============================================================= */
         function switchTab(id) {
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -134,6 +109,7 @@
                     initAdminMap(office.lat, office.lng, office.rad);
                 } else if (id === 'home') {
                     if (userMap) {
+                        userMap.invalidateSize && userMap.invalidateSize();
                         centerMapOnUser();
                     } else {
                         initUserMap(office.lat, office.lng, office.rad);
@@ -143,33 +119,19 @@
                 } else if (id === 'log') {
                     loadAttendanceLog();
                 } else if (id === 'izin') {
-                    // FIX: hanya admin yang load daftar approval.
-                    // User biasa tidak perlu fetch seluruh data izin orang lain.
-                    if (user && user.role === 'admin') {
-                        loadAdminIzin();
-                    }
+                    loadAdminIzin();
                 }
             }, 500);
         }
 
         /* =============================================================
-           SANITASI XSS — FIX: semua data dari server wajib lewat esc()
+           SANITASI XSS
         ============================================================= */
         function esc(str) {
             if (str === null || str === undefined) return '';
             const d = document.createElement('div');
             d.appendChild(document.createTextNode(String(str)));
             return d.innerHTML;
-        }
-
-        /* FIX: escape khusus untuk dipakai di dalam atribut onclick='...'.
-           esc() di atas hanya meng-escape karakter HTML (&, <, >, ") tapi
-           TIDAK meng-escape kutip tunggal ('). Karena semua onclick di app
-           ini memakai kutip tunggal sebagai delimiter, nama/jabatan/dll yang
-           mengandung karakter ' bisa memutus attribute dan menyuntik HTML/JS
-           baru (XSS). escAttr() menambahkan escape \' di atas hasil esc(). */
-        function escAttr(str) {
-            return esc(str).replace(/'/g, '&#39;');
         }
 
         /* =============================================================
@@ -179,7 +141,6 @@
             try {
                 google.script.run
                     .withSuccessHandler(function (data) {
-                        _usersCache = data || []; // FIX: simpan ke cache global juga di sini
                         if (!data || !data.length) {
                             document.getElementById('adminUserTable').innerHTML =
                                 '<tr><td colspan="6" class="py-8 text-center text-gray-400 text-xs">Belum ada data pegawai</td></tr>';
@@ -191,8 +152,6 @@
                             var roleBadge = u[4] === 'admin'
                                 ? 'bg-amber-100 text-amber-700'
                                 : 'bg-indigo-50 text-indigo-600';
-                            // FIX: u[4]=role, u[5]=pass — JANGAN tampilkan password di atribut HTML
-                            // Gunakan data-id untuk trigger modal, bukan inline onclick dengan semua data
                             return '<tr class="' + (i % 2 === 0 ? 'bg-white' : 'bg-gray-50') + ' border-b border-gray-100">' +
                                 '<td class="py-3 px-3 font-bold text-gray-400">' + (i + 1) + '</td>' +
                                 '<td class="py-3 px-3 font-bold text-gray-900">' + esc(u[1]) + '</td>' +
@@ -200,8 +159,8 @@
                                 '<td class="py-3 px-3 text-gray-600">' + esc(u[3]) + '</td>' +
                                 '<td class="py-3 px-3 text-center"><span class="px-2 py-1 rounded-lg text-[9px] font-black uppercase ' + roleBadge + '">' + esc(u[4]) + '</span></td>' +
                                 '<td class="py-3 px-3 text-center"><div class="flex gap-1 justify-center">' +
-                                '<button onclick="loadAndEditUser(\'' + escAttr(u[0]) + '\')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center"><i class="fas fa-edit text-[10px]"></i></button>' +
-                                '<button onclick="deleteUserUI(\'' + escAttr(u[0]) + '\')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center"><i class="fas fa-trash text-[10px]"></i></button>' +
+                                '<button onclick="loadAndEditUser(\'' + esc(u[0]) + '\')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center"><i class="fas fa-edit text-[10px]"></i></button>' +
+                                '<button onclick="deleteUserUI(\'' + esc(u[0]) + '\')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center"><i class="fas fa-trash text-[10px]"></i></button>' +
                                 '</div></td></tr>';
                         }).join('');
                     })
@@ -215,14 +174,8 @@
             }
         }
 
-        /* Simpan cache data pegawai untuk keperluan edit */
         var _usersCache = [];
 
-        /* FIX: satu-satunya jalur untuk membuka modal edit dari tabel
-           pegawai, baik dari loadPegawaiData() maupun renderAdmin().
-           Mengambil data mentah dari cache (bukan dari atribut onclick),
-           sehingga nama/jabatan yang berisi kutip tunggal tidak pernah
-           perlu di-inject langsung ke HTML attribute. */
         function loadAndEditUser(id) {
             if (_usersCache.length) {
                 var u = _usersCache.find(function (x) { return x[0] == id; });
@@ -233,7 +186,6 @@
                     _usersCache = data || [];
                     var u = _usersCache.find(function (x) { return x[0] == id; });
                     if (u) openUserModal(u[0], u[1], u[2], u[3], u[4]);
-                    else showToast('Data pegawai tidak ditemukan');
                 })
                 .withFailureHandler(function () { showToast('Gagal memuat data pegawai'); })
                 .getUsers();
@@ -241,7 +193,6 @@
 
         /* =============================================================
            LOG ABSENSI
-           FIX: index userName=13, mapsUrl=12 (sesuai backend baru)
         ============================================================= */
         var allLogData = [];
 
@@ -273,10 +224,8 @@
             }
 
             document.getElementById('adminAbsenceLog').innerHTML = data.map(function (a, i) {
-                // FIX: index eksplisit sesuai backend baru
-                // [10]photoIn [11]photoOut [12]mapsUrl [13]userName
                 var nama    = esc(a[13] || 'Anonim');
-                var mapsUrl = esc(a[12] || '#');
+                var mapsUrl = a[12] || '#';
                 var status  = a[9]  || 'Hadir';
 
                 var statusBadge = status === 'Hadir'
@@ -295,26 +244,9 @@
             }).join('');
         }
 
-        /* FIX: filterBulan dan filterTanggal sekarang saling reset otomatis.
-           Sebelumnya jika user mengisi filterBulan lalu mengisi filterTanggal,
-           keduanya tetap tersimpan di DOM dan applyLogFilter() mengutamakan
-           filterTanggal — tapi filterBulan tidak ikut dikosongkan di UI,
-           sehingga terlihat seperti dua filter aktif bersamaan (membingungkan)
-           padahal logikanya hanya satu yang dipakai. Sekarang field yang lain
-           langsung dikosongkan begitu salah satu filter diisi.
-        ============================================================= */
         function applyLogFilter() {
-            var elBulan   = document.getElementById('filterBulan');
-            var elTanggal = document.getElementById('filterTanggal');
-            var filterBulan   = elBulan.value;
-            var filterTanggal = elTanggal.value;
-
-            // Jika tanggal spesifik dipilih, filter bulan tidak relevan lagi -> reset di UI
-            if (filterTanggal) {
-                elBulan.value = '';
-                filterBulan = '';
-            }
-
+            var filterBulan   = document.getElementById('filterBulan').value;
+            var filterTanggal = document.getElementById('filterTanggal').value;
             var filtered = allLogData.filter(function (a) {
                 var tgl = a[2];
                 if (!tgl) return false;
@@ -325,14 +257,6 @@
             renderLogTable(filtered);
         }
 
-        // FIX: dipanggil dari onchange filterBulan agar filterTanggal ikut reset juga (dua arah)
-        function onFilterBulanChange() {
-            var elBulan   = document.getElementById('filterBulan');
-            var elTanggal = document.getElementById('filterTanggal');
-            if (elBulan.value) elTanggal.value = '';
-            applyLogFilter();
-        }
-
         function resetLogFilter() {
             document.getElementById('filterBulan').value   = '';
             document.getElementById('filterTanggal').value = '';
@@ -340,332 +264,175 @@
         }
 
         /* =============================================================
-   EXPORT PDF — rekap per pegawai + detail harian
-   FIX: auto-fetch allIzinData kalau cache kosong
-============================================================= */
-function exportPDF() {
-    var filterBulan   = document.getElementById('filterBulan').value;
-    var filterTanggal = document.getElementById('filterTanggal').value;
+           EXPORT PDF
+        ============================================================= */
+        function exportPDF() {
+            var filterBulan   = document.getElementById('filterBulan').value;
+            var filterTanggal = document.getElementById('filterTanggal').value;
 
-    // Tentukan data absensi yang akan dicetak
-    var dataCetak = allLogData;
-    var judulFilter = 'Semua Data';
-    if (filterBulan) {
-        dataCetak = allLogData.filter(function(a) { return a[2] && a[2].startsWith(filterBulan); });
-        var parts = filterBulan.split('-');
-        var bulanNames = ['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
-        judulFilter = 'Bulan ' + bulanNames[parseInt(parts[1])] + ' ' + parts[0];
-    } else if (filterTanggal) {
-        dataCetak = allLogData.filter(function(a) { return a[2] === filterTanggal; });
-        judulFilter = 'Tanggal ' + filterTanggal;
-    }
+            var dataCetak = allLogData;
+            var judulFilter = 'Semua Data';
+            if (filterBulan) {
+                dataCetak = allLogData.filter(function(a) { return a[2] && a[2].startsWith(filterBulan); });
+                var parts = filterBulan.split('-');
+                var bulanNames = ['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+                judulFilter = 'Bulan ' + bulanNames[parseInt(parts[1])] + ' ' + parts[0];
+            } else if (filterTanggal) {
+                dataCetak = allLogData.filter(function(a) { return a[2] === filterTanggal; });
+                judulFilter = 'Tanggal ' + filterTanggal;
+            }
 
-    if (!dataCetak.length) {
-        showToast('Tidak ada data untuk di-export!');
-        return;
-    }
+            if (!dataCetak.length) {
+                showToast('Tidak ada data untuk di-export!');
+                return;
+            }
 
-    // Kalau cache izin kosong, fetch dulu dari server sebelum generate PDF
-    if (!allIzinData || !allIzinData.length) {
-        showToast('⏳ Memuat data izin, harap tunggu...');
-        google.script.run
-            .withSuccessHandler(function(res) {
-                if (res && res.allPermits) allIzinData = res.allPermits;
-                _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
-            })
-            .withFailureHandler(function() {
-                // Tetap generate PDF meski izin gagal diambil — rekap izin akan 0
-                _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
-            })
-            .getDashboardData(user.id, user.role);
-    } else {
-        _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
-    }
-}
+            var totalHadir = dataCetak.filter(function(a) { return (a[9] || 'Hadir') === 'Hadir'; }).length;
+            var totalIzin  = dataCetak.length - totalHadir;
+            var printed    = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
 
-function _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal) {
-    // Filter data izin sesuai periode yang dipilih
-    var izinCetak = (allIzinData || []).filter(function(p) {
-        var tgl = p[3] || '';
-        if (!tgl) return false;
-        if (filterTanggal) return tgl === filterTanggal;
-        if (filterBulan)   return tgl.startsWith(filterBulan);
-        return true;
-    });
+            var rows = dataCetak.map(function(a, i) {
+                var status = a[9] || 'Hadir';
+                var statusColor = status === 'Hadir' ? '#10b981' : '#f59e0b';
+                return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';">' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">' + (i+1) + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(a[13] || '-') + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">' + esc(a[2] || '-') + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;color:#6366f1;font-weight:700;">' + esc(a[3] || '-') + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;color:#ef4444;font-weight:700;">' + esc(a[4] || '--:--') + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;"><span style="background:' + statusColor + '22;color:' + statusColor + ';padding:2px 8px;border-radius:6px;font-size:10px;font-weight:800;">' + esc(status) + '</span></td>' +
+                '</tr>';
+            }).join('');
 
-    // === REKAP PER PEGAWAI ===
-    var rekapMap = {};
+            var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+                '<title>Log Absensi - ' + judulFilter + '</title>' +
+                '<style>' +
+                    'body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1e293b;}' +
+                    'h1{font-size:20px;font-weight:900;margin:0;color:#1e293b;}' +
+                    'h2{font-size:13px;font-weight:600;color:#6366f1;margin:4px 0 0;}' +
+                    '.header{border-bottom:3px solid #6366f1;padding-bottom:12px;margin-bottom:16px;}' +
+                    '.stats{display:flex;gap:16px;margin-bottom:16px;}' +
+                    '.stat{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;text-align:center;}' +
+                    '.stat-num{font-size:22px;font-weight:900;color:#6366f1;}' +
+                    '.stat-lbl{font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;}' +
+                    'table{width:100%;border-collapse:collapse;font-size:12px;}' +
+                    'thead tr{background:#1e293b;color:white;}' +
+                    'thead th{padding:10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;}' +
+                    '.footer{margin-top:16px;font-size:10px;color:#94a3b8;text-align:right;}' +
+                    '@media print{body{padding:10px;}button{display:none!important;}}' +
+                '</style></head><body>' +
+                '<div class="header">' +
+                    '<h1>📋 Laporan Log Absensi</h1>' +
+                    '<h2>Presensi Solider &nbsp;|&nbsp; ' + judulFilter + '</h2>' +
+                '</div>' +
+                '<div class="stats">' +
+                    '<div class="stat"><div class="stat-num">' + dataCetak.length + '</div><div class="stat-lbl">Total Data</div></div>' +
+                    '<div class="stat"><div class="stat-num" style="color:#10b981;">' + totalHadir + '</div><div class="stat-lbl">Hadir</div></div>' +
+                    '<div class="stat"><div class="stat-num" style="color:#f59e0b;">' + totalIzin + '</div><div class="stat-lbl">Izin/Lainnya</div></div>' +
+                '</div>' +
+                '<table>' +
+                    '<thead><tr><th>#</th><th>Nama</th><th>Tanggal</th><th>Jam Masuk</th><th>Jam Keluar</th><th>Status</th></tr></thead>' +
+                    '<tbody>' + rows + '</tbody>' +
+                '</table>' +
+                '<div class="footer">Dicetak pada ' + printed + ' &nbsp;|&nbsp; Presensi Solider</div>' +
+                '<br><button onclick="window.print()" style="background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">🖨️ Cetak / Save PDF</button>' +
+                '</body></html>';
 
-    // Isi dari data absensi
-    dataCetak.forEach(function(a) {
-        var nama   = a[13] || 'Anonim';
-        var status = a[9]  || 'Hadir';
-        if (!rekapMap[nama]) rekapMap[nama] = { hadir: 0, sakit: 0, cuti: 0, izinLain: 0 };
-        if (status === 'Hadir') rekapMap[nama].hadir++;
-    });
-
-    // Isi dari data izin (hanya yang Disetujui)
-    izinCetak.forEach(function(p) {
-        var nama   = p[2] || 'Anonim';
-        var jenis  = p[4] || '';
-        var status = p[7] || '';
-        if (status !== 'Disetujui') return;
-        if (!rekapMap[nama]) rekapMap[nama] = { hadir: 0, sakit: 0, cuti: 0, izinLain: 0 };
-        if (jenis === 'Sakit')       rekapMap[nama].sakit++;
-        else if (jenis === 'Cuti')   rekapMap[nama].cuti++;
-        else                         rekapMap[nama].izinLain++;
-    });
-
-    // Baris tabel rekap
-    var rekapRows = Object.keys(rekapMap).sort().map(function(nama, i) {
-        var r = rekapMap[nama];
-        var totalTdk = r.sakit + r.cuti + r.izinLain;
-        return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';page-break-inside:avoid;">' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(nama) + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#10b981;font-weight:800;">' + r.hadir + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#ef4444;font-weight:700;">' + r.sakit + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#0ea5e9;font-weight:700;">' + r.cuti + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#f59e0b;font-weight:700;">' + r.izinLain + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#6366f1;font-weight:800;">' + (r.hadir + totalTdk) + '</td>' +
-        '</tr>';
-    }).join('');
-
-    // === STATISTIK RINGKASAN ===
-    var totalHadir = dataCetak.filter(function(a) { return (a[9] || 'Hadir') === 'Hadir'; }).length;
-    var totalIzinDisetujui = izinCetak.filter(function(p) { return p[7] === 'Disetujui'; }).length;
-    var printed = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
-
-    // === BARIS TABEL DETAIL HARIAN ===
-    var rows = dataCetak.map(function(a, i) {
-        var status = a[9] || 'Hadir';
-        var statusColor = status === 'Hadir' ? '#10b981' : '#f59e0b';
-        return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';page-break-inside:avoid;">' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;">' + (i+1) + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(a[13] || '-') + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;">' + esc(a[2] || '-') + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;color:#6366f1;font-weight:700;">' + esc(a[3] || '-') + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;color:#ef4444;font-weight:700;">' + esc(a[4] || '--:--') + '</td>' +
-            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;"><span style="background:' + statusColor + '22;color:' + statusColor + ';padding:2px 8px;border-radius:6px;font-size:10px;font-weight:800;">' + esc(status) + '</span></td>' +
-        '</tr>';
-    }).join('');
-
-    // === BANGUN HTML PDF ===
-    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
-        '<title>Laporan Absensi - ' + judulFilter + '</title>' +
-        '<style>' +
-            'body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1e293b;}' +
-            'h1{font-size:20px;font-weight:900;margin:0;color:#1e293b;}' +
-            'h2{font-size:13px;font-weight:600;color:#6366f1;margin:4px 0 0;}' +
-            'h3{font-size:12px;font-weight:800;color:#1e293b;margin:20px 0 8px;text-transform:uppercase;letter-spacing:0.5px;}' +
-            '.header{border-bottom:3px solid #6366f1;padding-bottom:12px;margin-bottom:16px;}' +
-            '.stats{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;}' +
-            '.stat{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;text-align:center;min-width:80px;}' +
-            '.stat-num{font-size:22px;font-weight:900;color:#6366f1;}' +
-            '.stat-lbl{font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;}' +
-            'table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:24px;}' +
-            'thead tr{background:#1e293b;color:white;}' +
-            'thead th{padding:9px 10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;}' +
-            'thead th.num{text-align:center;}' +
-            'tbody tr{page-break-inside:avoid;}' +
-            '.footer{margin-top:16px;font-size:10px;color:#94a3b8;text-align:right;}' +
-            '@media print{body{padding:10px;}button{display:none!important;}.no-break{page-break-inside:avoid;}}' +
-        '</style></head><body>' +
-        '<div class="header">' +
-            '<h1>📋 Laporan Absensi Pegawai</h1>' +
-            '<h2>Presensi Solider &nbsp;|&nbsp; ' + judulFilter + '</h2>' +
-        '</div>' +
-        '<div class="stats">' +
-            '<div class="stat"><div class="stat-num">' + Object.keys(rekapMap).length + '</div><div class="stat-lbl">Pegawai</div></div>' +
-            '<div class="stat"><div class="stat-num" style="color:#10b981;">' + totalHadir + '</div><div class="stat-lbl">Total Hadir</div></div>' +
-            '<div class="stat"><div class="stat-num" style="color:#f59e0b;">' + totalIzinDisetujui + '</div><div class="stat-lbl">Total Izin</div></div>' +
-            '<div class="stat"><div class="stat-num" style="color:#64748b;">' + dataCetak.length + '</div><div class="stat-lbl">Total Entri</div></div>' +
-        '</div>' +
-        '<h3>📊 Rekap Per Pegawai</h3>' +
-        (rekapRows ? (
-            '<table>' +
-                '<thead><tr>' +
-                    '<th>Nama Pegawai</th>' +
-                    '<th class="num">Hadir</th>' +
-                    '<th class="num">Sakit</th>' +
-                    '<th class="num">Cuti</th>' +
-                    '<th class="num">Izin Lain</th>' +
-                    '<th class="num">Total Hari</th>' +
-                '</tr></thead>' +
-                '<tbody>' + rekapRows + '</tbody>' +
-            '</table>'
-        ) : '<p style="font-size:11px;color:#94a3b8;">Tidak ada data.</p>') +
-        '<h3>🗒️ Detail Harian</h3>' +
-        '<table>' +
-            '<thead><tr><th>#</th><th>Nama</th><th>Tanggal</th><th>Jam Masuk</th><th>Jam Keluar</th><th>Status</th></tr></thead>' +
-            '<tbody>' + rows + '</tbody>' +
-        '</table>' +
-        '<div class="footer">Dicetak pada ' + printed + ' &nbsp;|&nbsp; Presensi Solider</div>' +
-        '<br><button onclick="window.print()" style="background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">🖨️ Cetak / Save PDF</button>' +
-        '</body></html>';
-
-    var win = window.open('', '_blank');
-    if (!win) {
-        showToast('Popup diblokir! Izinkan popup di browser.');
-        return;
-    }
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-}
+            var win = window.open('', '_blank');
+            if (!win) {
+                showToast('Popup diblokir! Izinkan popup di browser.');
+                return;
+            }
+            win.document.write(html);
+            win.document.close();
+            win.focus();
+        }
 
         /* =============================================================
            LOGIN & LOGOUT
-           FIX: btn.disabled = true agar tidak bisa double-klik
         ============================================================= */
         function handleLogin() {
-    const phone = document.getElementById('loginPhone').value.trim();
-    const pass  = document.getElementById('loginPass').value.trim(); // trim() tambahan untuk Kodular
-    const btn   = document.getElementById('btnLogin');
+            const phone = document.getElementById('loginPhone').value.trim();
+            const pass  = document.getElementById('loginPass').value;
+            const btn   = document.getElementById('btnLogin');
 
-    if (!phone || !pass) return showToast("Harap isi semua bidang!");
+            if (!phone || !pass) return showToast("Harap isi semua bidang!");
 
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
-    btn.disabled  = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
+            btn.disabled  = true;
 
-    google.script.run
-        .withSuccessHandler(res => {
-            if (res && res.success) {
-                user = res.user;
-                localStorage.setItem('presensi_user_v3', JSON.stringify(user));
-                setupApp();
-            } else {
-                showToast(res ? res.message : "Terjadi kesalahan server");
-                btn.innerHTML = 'MASUK SEKARANG';
-                btn.disabled  = false;
-            }
-        })
-        .withFailureHandler(err => {
-            showToast("Gagal terhubung ke server");
-            btn.innerHTML = 'MASUK SEKARANG';
-            btn.disabled  = false;
-        })
-        .checkLogin(phone, pass);
-}
-
-function refreshData() {
-    if (!user) return;
-    document.getElementById('refreshIcon')?.classList.add('spinning');
-    google.script.run
-        .withSuccessHandler(res => {
-            document.getElementById('refreshIcon')?.classList.remove('spinning');
-
-            // ── CEK SESI TIDAK VALID ──────────────────────────────────
-            if (res && res.invalidSession) {
-                showToast("Sesi berakhir. Silakan login kembali.");
-                localStorage.removeItem('presensi_user_v3');
-                user = null;
-                // Reset state & paksa logout
-                userMap = null; adminMap = null;
-                hasInitialGPSFix = false;
-                document.getElementById('user-map').innerHTML = '';
-                document.getElementById('loginPhone').value = '';
-                document.getElementById('loginPass').value  = '';
-                document.getElementById('btnLogin').innerHTML = 'MASUK SEKARANG';
-                document.getElementById('btnLogin').disabled  = false;
-                document.getElementById('nav-setting').classList.add('hidden');
-                document.getElementById('nav-pegawai').classList.add('hidden');
-                document.getElementById('nav-log').classList.add('hidden');
-                document.getElementById('nav-izin').classList.add('hidden');
-                switchTab('home');
-                document.getElementById('app').classList.add('hidden');
-                document.getElementById('loginScreen').classList.remove('hidden');
-                return;
-            }
-            // ── AKHIR CEK SESI ────────────────────────────────────────
-
-            if (!res || res.error) {
-                console.warn('refreshData error:', res && res.error);
-                if (res && res.error) showToast('Server error: ' + res.error);
-                initUserMap(office.lat, office.lng, office.rad);
-                updateGPSUI();
-                return;
-            }
-
-            if (res.settings) {
-                const s         = res.settings;
-                const rawLat    = s.office_lat || s.officelat || s.lat;
-                const rawLng    = s.office_lng || s.officelng || s.lng;
-                const rawRad    = s.radius     || s.rad;
-                const parsedLat = parseFloat(rawLat);
-                const parsedLng = parseFloat(rawLng);
-                if (rawLat && rawLng && Math.abs(parsedLat) <= 90 && Math.abs(parsedLng) <= 180) {
-                    office = { lat: parsedLat, lng: parsedLng, rad: parseInt(rawRad) || 100 };
-                    localStorage.setItem('presensi_office_v3', JSON.stringify(office));
-                }
-            }
-
-            initUserMap(office.lat, office.lng, office.rad);
-
-            const historyDiv = document.getElementById('userHistory');
-            const attItems = (res.history || []).map(h => ({
-                type: 'absen', tgl: h[2] || '', jamIn: h[3] || '',
-                jamOut: h[4] || '', status: h[9] || 'Hadir'
-            }));
-            const izinItems = (res.userPermits || []).map(p => ({
-                type: 'izin', tgl: p[3] || '', jenisIzin: p[4] || 'Izin',
-                alasan: p[5] || '', statusIzin: p[7] || 'Menunggu'
-            }));
-            const combined = [...attItems, ...izinItems]
-                .sort((a, b) => (b.tgl > a.tgl ? 1 : b.tgl < a.tgl ? -1 : 0));
-
-            if (combined.length > 0) {
-                historyDiv.innerHTML = combined.map(item => {
-                    if (item.type === 'absen') {
-                        return `<div class="bg-white p-4 rounded-2xl border border-gray-100 flex justify-between items-center shadow-sm">
-                            <div class="flex items-center gap-3">
-                                <div class="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 flex-shrink-0">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 11c2.21 0 4-1.79 4-4S14.21 3 12 3 8 4.79 8 7s1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
-                                </div>
-                                <div>
-                                    <p class="text-[10px] font-black text-indigo-600">${esc(item.tgl)}</p>
-                                    <h4 class="font-bold text-gray-900 text-xs">${esc(item.jamIn)} – ${esc(item.jamOut || '--:--')}</h4>
-                                </div>
-                            </div>
-                            <span class="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[9px] font-bold">${esc(item.status)}</span>
-                        </div>`;
+            google.script.run
+                .withSuccessHandler(res => {
+                    if (res && res.success) {
+                        user = res.user;
+                        localStorage.setItem('presensi_user_v3', JSON.stringify(user));
+                        setupApp();
                     } else {
-                        const sc = item.statusIzin === 'Disetujui' ? 'bg-emerald-50 text-emerald-600'
-                            : item.statusIzin === 'Ditolak' ? 'bg-red-50 text-red-500'
-                            : 'bg-amber-50 text-amber-600';
-                        return `<div class="bg-white p-4 rounded-2xl border border-gray-100 flex justify-between items-center shadow-sm">
-                            <div class="flex items-center gap-3">
-                                <div class="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500 flex-shrink-0">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                                </div>
-                                <div>
-                                    <p class="text-[10px] font-black text-amber-500">${esc(item.tgl)} • ${esc(item.jenisIzin)}</p>
-                                    <h4 class="font-bold text-gray-900 text-xs truncate max-w-[160px]">${esc(item.alasan)}</h4>
-                                </div>
-                            </div>
-                            <span class="px-3 py-1 rounded-lg text-[9px] font-bold ${sc}">${esc(item.statusIzin)}</span>
-                        </div>`;
+                        showToast(res ? res.message : "Terjadi kesalahan server");
+                        btn.innerHTML = 'MASUK SEKARANG';
+                        btn.disabled  = false;
                     }
-                }).join('');
-            } else {
-                historyDiv.innerHTML = '<p class="text-center text-xs py-4 text-gray-400">Belum ada riwayat</p>';
-            }
+                })
+                .withFailureHandler(err => {
+                    showToast("Gagal terhubung ke server");
+                    btn.innerHTML = 'MASUK SEKARANG';
+                    btn.disabled  = false;
+                })
+                .checkLogin(phone, pass);
+        }
 
-            if (user.role === 'admin') renderAdmin(res);
-            updateGPSUI();
-        })
-        .withFailureHandler(err => {
-            document.getElementById('refreshIcon')?.classList.remove('spinning');
-            console.error('refreshData GAGAL:', err);
-            showToast("Gagal memuat data dari server");
-            initUserMap(office.lat, office.lng, office.rad);
-        })
-        .getDashboardData(user.id, user.role);
+        window.addEventListener('load', () => {
+            const passField = document.getElementById('loginPass');
+            if (passField) passField.addEventListener('keydown', e => {
+                if (e.key === 'Enter') handleLogin();
+            });
+        });
+
+        // ─── FIX LOGOUT ───────────────────────────────────────────────
+        // confirm() diblokir WebViewer Android — pakai showToast konfirmasi
+        // custom agar tombol logout bisa bekerja di dalam MIT App Inventor / Kodular.
+        // ──────────────────────────────────────────────────────────────
+        function handleLogout() {
+    document.getElementById('logoutModal').classList.replace('hidden', 'flex');
 }
+
+function closeLogoutModal() {
+    document.getElementById('logoutModal').classList.replace('flex', 'hidden');
+}
+
+        function doLogout() {
+            localStorage.removeItem('presensi_user_v3');
+            user = null;
+
+            userMap = null;
+            adminMap = null;
+            userPosMarker = null;
+            userOfficeCircle = null;
+            userOfficeMarker = null;
+            adminMarker = null;
+            adminCircle = null;
+            hasInitialGPSFix = false;
+            const mc = document.getElementById('user-map');
+            if (mc) mc.innerHTML = '';
+
+            document.getElementById('loginPhone').value = '';
+            document.getElementById('loginPass').value  = '';
+            document.getElementById('btnLogin').innerHTML = 'MASUK SEKARANG';
+            document.getElementById('btnLogin').disabled  = false;
+
+            document.getElementById('nav-setting').classList.add('hidden');
+            document.getElementById('nav-pegawai').classList.add('hidden');
+            document.getElementById('nav-log').classList.add('hidden');
+            document.getElementById('nav-izin').classList.add('hidden');
+
+            switchTab('home');
+            document.getElementById('app').classList.add('hidden');
+            document.getElementById('loginScreen').classList.remove('hidden');
+        }
 
         /* =============================================================
            KAMERA & SELFIE
         ============================================================= */
-        // Dipanggil saat label diklik — cek radius dulu, lalu biarkan label buka input (web) atau trigger Kodular
         function handleAttendanceClick(type, event) {
             attType = type;
             const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
@@ -678,14 +445,11 @@ function refreshData() {
                 window.AppInventor.setWebViewString("openCamera");
                 return;
             }
-            // Browser web (termasuk di dalam iframe GAS):
-            // Trigger input file secara manual agar kamera terbuka langsung
             event.preventDefault();
             var inputId = (type === 'IN') ? 'cameraInputMasuk' : 'cameraInputKeluar';
             document.getElementById(inputId).click();
         }
 
-        // Dipanggil saat foto dipilih di browser web
         function handleCameraChange(type, input) {
             if (!input.files || !input.files[0]) return;
             attType = type;
@@ -695,8 +459,6 @@ function refreshData() {
                 var img = new Image();
                 img.onload = function () {
                     var can  = document.getElementById('canvas');
-                    // Kompres lebih agresif: maxW 480px, quality 0.4
-                    // agar tidak timeout di Google Apps Script (batas 30 detik)
                     var maxW  = 480;
                     var scale = (img.width > maxW) ? maxW / img.width : 1;
                     can.width  = img.width  * scale;
@@ -704,7 +466,6 @@ function refreshData() {
                     can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
                     var dataUrl = can.toDataURL('image/jpeg', 0.4);
 
-                    // Cek ukuran hasil kompres (GAS max ~5MB payload)
                     var sizeKB = Math.round(dataUrl.length * 0.75 / 1024);
                     if (sizeKB > 4500) {
                         showToast("Foto terlalu besar (" + sizeKB + "KB), coba lagi.");
@@ -713,7 +474,6 @@ function refreshData() {
 
                     showToast("📤 Mengirim absensi... mohon tunggu");
 
-                    // Timeout fallback: jika 35 detik tidak ada respons, beri tahu user
                     var timeoutId = setTimeout(function() {
                         showToast("⏱ Server lambat merespons. Cek riwayat absensi Anda.");
                     }, 35000);
@@ -738,35 +498,28 @@ function refreshData() {
             reader.readAsDataURL(file);
         }
 
-        /* FIX: startAttendance() legacy dihapus sepenuhnya — sudah tidak
-           dipanggil di mana pun (digantikan handleAttendanceClick). */
-
         /* =============================================================
            FETCH DATA DASHBOARD
-           FIX: race condition — flag _isRefreshing mencegah refreshData()
-           dipanggil bertumpuk (misal user tap tombol refresh berkali-kali
-           dengan cepat, atau auto-refresh dan tap manual bersamaan), yang
-           sebelumnya bisa menyebabkan beberapa response saling menimpa
-           render DOM yang sama dengan urutan tidak terduga.
         ============================================================= */
-        var _isRefreshing = false;
-
         function refreshData() {
             if (!user) return;
-            if (_isRefreshing) return; // FIX: cegah request bertumpuk
-            _isRefreshing = true;
-
             document.getElementById('refreshIcon')?.classList.add('spinning');
             google.script.run
                 .withSuccessHandler(res => {
-                  document.getElementById('refreshIcon')?.classList.remove('spinning');
-                  _isRefreshing = false; // FIX: reset flag setelah selesai
+                    document.getElementById('refreshIcon')?.classList.remove('spinning');
 
                     if (!res || res.error) {
                         console.warn('refreshData error:', res && res.error);
                         if (res && res.error) showToast('Server error: ' + res.error);
                         initUserMap(office.lat, office.lng, office.rad);
                         updateGPSUI();
+                        return;
+                    }
+
+                    // FIX: Jika sesi tidak valid (user dihapus admin), logout otomatis
+                    if (res.invalidSession) {
+                        showToast('Sesi tidak valid, silakan login ulang.');
+                        doLogout();
                         return;
                     }
 
@@ -777,8 +530,6 @@ function refreshData() {
                         const rawRad = s.radius     || s.rad;
                         const parsedLat = parseFloat(rawLat);
                         const parsedLng = parseFloat(rawLng);
-                        // FIX: validasi rentang sebelum dipakai, sebagai lapis
-                        // pengaman tambahan terhadap data salah skala dari sheet.
                         if (rawLat && rawLng && Math.abs(parsedLat) <= 90 && Math.abs(parsedLng) <= 180) {
                             office = { lat: parsedLat, lng: parsedLng, rad: parseInt(rawRad) || 100 };
                             localStorage.setItem('presensi_office_v3', JSON.stringify(office));
@@ -790,7 +541,6 @@ function refreshData() {
                     initUserMap(office.lat, office.lng, office.rad);
 
                     const historyDiv = document.getElementById('userHistory');
-                    // Hanya kumpulkan tanggal izin yang DISETUJUI untuk menyembunyikan absen di hari itu
                     const attItems = (res.history || []).map(h => ({
                         type:   'absen',
                         tgl:    h[2] || '',
@@ -853,8 +603,7 @@ function refreshData() {
                     updateGPSUI();
                 })
                 .withFailureHandler(err => {
-                  document.getElementById('refreshIcon')?.classList.remove('spinning');
-                  _isRefreshing = false; // FIX: reset flag juga saat gagal
+                    document.getElementById('refreshIcon')?.classList.remove('spinning');
                     console.error('refreshData GAGAL:', err);
                     showToast("Gagal memuat data dari server");
                     initUserMap(office.lat, office.lng, office.rad);
@@ -864,8 +613,6 @@ function refreshData() {
 
         /* =============================================================
            RENDER ADMIN DASHBOARD
-           FIX: index kolom disesuaikan
-           [10]photoIn [11]photoOut [12]mapsUrl [13]userName
         ============================================================= */
         function renderAdmin(res) {
             if (!res || !res.stats) return;
@@ -874,7 +621,6 @@ function refreshData() {
             const elST2 = document.getElementById('statTotal2'); if (elST2) elST2.innerText = res.stats.totalPegawai;
             const elSH2 = document.getElementById('statHadir2'); if (elSH2) elSH2.innerText = res.stats.absenHariIni;
 
-            // Update badge pending izin di tab Izin
             const pendingCount = res.stats.izinPending || 0;
             const badge = document.getElementById('izinPendingBadge');
             if (badge) {
@@ -882,10 +628,8 @@ function refreshData() {
                 badge.classList.toggle('hidden', pendingCount === 0);
             }
 
-            // Simpan cache allPermits agar tab Izin bisa pakai tanpa fetch ulang
             if (res.allPermits) {
                 allIzinData = res.allPermits;
-                // Jika tab izin sedang aktif, re-render
                 if (document.getElementById('tab-izin').classList.contains('active')) {
                     applyIzinFilter();
                 }
@@ -896,7 +640,7 @@ function refreshData() {
             }
 
             if (res.allUsers) {
-                _usersCache = res.allUsers; // simpan cache untuk keperluan edit
+                _usersCache = res.allUsers;
                 const elPC = document.getElementById('pegawaiCount'); if (elPC) elPC.innerText = res.allUsers.length;
                 document.getElementById('adminUserTable').innerHTML = res.allUsers.map((u, i) => `
                     <tr class="${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'} border-b border-gray-100 hover:bg-indigo-50 transition-colors">
@@ -909,24 +653,20 @@ function refreshData() {
                         </td>
                         <td class="py-3 px-3 text-center">
                             <div class="flex gap-1 justify-center">
-                                <button onclick="loadAndEditUser('${escAttr(u[0])}')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center hover:bg-indigo-100"><i class="fas fa-edit text-[10px]"></i></button>
-                                <button onclick="deleteUserUI('${escAttr(u[0])}')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center hover:bg-red-100"><i class="fas fa-trash text-[10px]"></i></button>
+                                <button onclick="openUserModal('${esc(u[0])}','${esc(u[1])}','${esc(u[2])}','${esc(u[3])}','${esc(u[4])}')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center hover:bg-indigo-100"><i class="fas fa-edit text-[10px]"></i></button>
+                                <button onclick="deleteUserUI('${esc(u[0])}')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center hover:bg-red-100"><i class="fas fa-trash text-[10px]"></i></button>
                             </div>
                         </td>
                     </tr>
                 `).join('');
-                // FIX: openUserModal tidak lagi dipanggil langsung dengan data mentah
-                // di onclick (rawan rusak/inject jika ada karakter ' pada nama/jabatan).
-                // Sekarang pakai loadAndEditUser(id) yang ambil data dari cache _usersCache.
             }
 
-            // FIX: allAttendance index baru
             if (res.allAttendance) {
                 document.getElementById('adminAbsenceLog').innerHTML = res.allAttendance.map(a => {
-                    var userName = esc(a[13] || 'Anonim'); // FIX: index 13
-                    var mapsUrl  = esc(a[12] || '#');       // FIX: index 12 + esc untuk href
-                    var photoIn  = esc(a[10] || '');
-                    var photoOut = esc(a[11] || '');
+                    var userName = esc(a[13] || 'Anonim');
+                    var mapsUrl  = a[12] || '#';
+                    var photoIn  = a[10] || '';
+                    var photoOut = a[11] || '';
 
                     return `
                         <div class="bg-white p-4 rounded-2xl border border-gray-100 space-y-3 shadow-sm">
@@ -958,8 +698,6 @@ function refreshData() {
 
         /* =============================================================
            CRUD PEGAWAI
-           FIX: password tidak ditampilkan di HTML atribut
-           Modal edit hanya isi field tanpa password (kosong = tidak diubah)
         ============================================================= */
         function openUserModal(id = '', nama = '', jab = '', phone = '', role = 'pegawai') {
             document.getElementById('editId').value   = id;
@@ -967,7 +705,7 @@ function refreshData() {
             document.getElementById('uJab').value     = jab;
             document.getElementById('uPhone').value   = phone;
             document.getElementById('uRole').value    = role;
-            document.getElementById('uPass').value    = ''; // FIX: kosongkan, user isi manual jika ingin ganti
+            document.getElementById('uPass').value    = '';
             document.getElementById('modalTitle').innerText = id ? "Edit Pegawai" : "Tambah Pegawai";
             if (id) {
                 document.getElementById('uPass').placeholder = 'Password baru (kosongkan jika tidak diganti)';
@@ -1001,7 +739,7 @@ function refreshData() {
                 .withSuccessHandler(res => {
                     showToast(res.message || 'Berhasil');
                     closeUserModal();
-                    _usersCache = []; // reset cache
+                    _usersCache = [];
                     refreshData();
                 })
                 .withFailureHandler(() => showToast("Gagal simpan data"))
@@ -1009,16 +747,16 @@ function refreshData() {
         }
 
         function deleteUserUI(id) {
-            if (confirm("Hapus data pegawai ini permanen?")) {
-                google.script.run
-                    .withSuccessHandler(res => {
-                        showToast(res.message || 'Berhasil dihapus');
-                        _usersCache = [];
-                        refreshData();
-                    })
-                    .withFailureHandler(() => showToast("Gagal hapus data"))
-                    .deleteUser(id);
-            }
+            // FIX: confirm() diblokir WebViewer — gunakan cara yang sama seperti logout
+            if (!window.AppInventor && !confirm("Hapus data pegawai ini permanen?")) return;
+            google.script.run
+                .withSuccessHandler(res => {
+                    showToast(res.message || 'Berhasil dihapus');
+                    _usersCache = [];
+                    refreshData();
+                })
+                .withFailureHandler(() => showToast("Gagal hapus data"))
+                .deleteUser(id);
         }
 
         /* =============================================================
@@ -1026,7 +764,6 @@ function refreshData() {
         ============================================================= */
         let hasInitialGPSFix = false;
 
-        // Dipanggil dari Kodular native
         function receiveNativeLocation(lat, lng) {
             currentLoc = { lat: parseFloat(lat), lng: parseFloat(lng) };
             updateGPSUI();
@@ -1045,7 +782,6 @@ function refreshData() {
                 document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
                 return;
             }
-            // kode absensi
             showToast("📷 Foto diterima, memproses...");
             var dataUrl = 'data:image/jpeg;base64,' + base64Data;
             var can = document.getElementById('canvas');
@@ -1088,10 +824,6 @@ function refreshData() {
                     currentLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
                     updateGPSUI();
                     updateUserMapLive();
-                    // FIX: jangan set flag true kalau map belum terbentuk.
-                    // Sebelumnya GPS biasanya didapat lebih cepat daripada proses
-                    // pembuatan map (yang ditunda 1500ms), jadi hasInitialGPSFix
-                    // sudah true padahal map belum pernah di-auto-center.
                     if (!hasInitialGPSFix && userMap) {
                         hasInitialGPSFix = true;
                         centerMapOnUser();
@@ -1122,9 +854,6 @@ function refreshData() {
                 if (userOfficeCircle) userOfficeCircle.setStyle({ color: '#ef4444', fillColor: '#ef4444' });
             }
         }
-
-        var _mapInitTimer = null;
-        var _mapIsInitializing = false;
 
         function initUserMap(lat, lng, rad) {
             const mc = document.getElementById('user-map');
@@ -1170,10 +899,7 @@ function refreshData() {
             </div>`;
         }
 
-        function fitMapView() { /* tidak dipakai - map diganti UI GPS */ }
-
         function updateUserMapLive() {
-            // Update UI GPS card setiap kali posisi berubah
             if (userMap) renderUserMapUI();
         }
 
@@ -1186,7 +912,6 @@ function refreshData() {
             var mc = document.getElementById('admin-map');
             if (!mc) return;
 
-            // Hanya isi field jika masih kosong (tidak overwrite yang sedang diketik user)
             var elLat = document.getElementById('adm-lat');
             var elLng = document.getElementById('adm-lng');
             var elRad = document.getElementById('adm-rad');
@@ -1209,10 +934,6 @@ function refreshData() {
             adminMap = true;
         }
 
-        function updateMapCircle() {
-            // Tidak ada circle Leaflet, tidak perlu lakukan apa-apa
-        }
-
         function saveGPS() {
             const la = document.getElementById('adm-lat').value;
             const ln = document.getElementById('adm-lng').value;
@@ -1222,12 +943,8 @@ function refreshData() {
             const laNum = parseFloat(la);
             const lnNum = parseFloat(ln);
 
-            // FIX: validasi rentang koordinat sebelum disimpan. Latitude harus
-            // -90..90 dan longitude -180..180. Ini mencegah nilai yang sudah
-            // salah skala (misal akibat masalah locale Sheets, jadi 3509954
-            // bukan 3.509954) ikut tersimpan dan memperburuk masalah peta.
             if (Math.abs(laNum) > 90 || Math.abs(lnNum) > 180) {
-                return showToast("Koordinat tidak valid! Klik ulang titik di peta.");
+                return showToast("Koordinat tidak valid! Periksa kembali Lat/Lng.");
             }
 
             office = { lat: laNum, lng: lnNum, rad: parseInt(rd) };
@@ -1286,14 +1003,13 @@ function refreshData() {
                 listEl.innerHTML = '<p class="text-center text-xs py-8 text-gray-400">Tidak ada data izin</p>';
                 return;
             }
-            // Kolom Permits: [0]id [1]userId [2]nama [3]tgl [4]jenis [5]alasan [6]lampiran [7]status_app
             listEl.innerHTML = data.map(function(p) {
-                const id        = esc(p[0]);
+                const id        = p[0];
                 const nama      = esc(p[2] || 'Anonim');
                 const tgl       = esc(p[3] || '-');
                 const jenis     = esc(p[4] || '-');
                 const alasan    = esc(p[5] || '-');
-                const lampiran  = esc(p[6] || '');
+                const lampiran  = p[6] || '';
                 const status    = p[7] || 'Menunggu';
 
                 const scBadge = status === 'Disetujui'
@@ -1316,9 +1032,7 @@ function refreshData() {
                             class="flex-1 bg-red-500 text-white py-2.5 rounded-xl text-[10px] font-bold active:scale-95 transition-all shadow-sm">
                             <i class="fas fa-times mr-1"></i> Tolak
                        </button>`
-                    : `<span class="flex-1 text-center text-[10px] font-bold text-gray-400 py-2">
-                            Sudah diproses
-                       </span>`;
+                    : `<span class="flex-1 text-center text-[10px] font-bold text-gray-400 py-2">Sudah diproses</span>`;
 
                 return `
                 <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
@@ -1338,9 +1052,7 @@ function refreshData() {
                     ${lampiran ? `
                     <div class="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-xl">
                         <i class="fas fa-paperclip text-gray-400 text-xs"></i>
-                        <a href="${lampiran}" target="_blank" class="text-[10px] font-bold text-indigo-600 truncate underline">
-                            Lihat Lampiran
-                        </a>
+                        <a href="${lampiran}" target="_blank" class="text-[10px] font-bold text-indigo-600 truncate underline">Lihat Lampiran</a>
                     </div>` : ''}
                     <div class="flex gap-2 pt-1 border-t border-dashed border-gray-100">
                         ${btnApprove}
@@ -1350,15 +1062,16 @@ function refreshData() {
         }
 
         function updateIzinStatus(id, status) {
+            // FIX: confirm() diblokir WebViewer — skip konfirmasi di Kodular
             const label = status === 'Disetujui' ? 'menyetujui' : 'menolak';
-            if (!confirm('Yakin ' + label + ' pengajuan izin ini?')) return;
+            if (!window.AppInventor && !confirm('Yakin ' + label + ' pengajuan izin ini?')) return;
             showToast('Memproses...');
             google.script.run
                 .withSuccessHandler(function(res) {
                     if (res && res.success) {
                         showToast('Status izin diperbarui!');
                         loadAdminIzin();
-                        refreshData(); // perbarui badge pending di dashboard
+                        refreshData();
                     } else {
                         showToast(res ? res.message : 'Gagal memperbarui status');
                     }
@@ -1369,10 +1082,9 @@ function refreshData() {
 
         /* =============================================================
            IZIN / PERMITS
-           FIX: validasi ukuran file maks 5MB
-                fileData dikirim base64 murni — backend yang rekonstruksi data URL
         ============================================================= */
         var _permitMode = false;
+
         function openPermitModal() {
             const tzoffset    = (new Date()).getTimezoneOffset() * 60000;
             const localISOTime = (new Date(Date.now() - tzoffset)).toISOString().split('T')[0];
@@ -1386,11 +1098,9 @@ function refreshData() {
 
         function triggerPermitPhoto() {
             if (window.AppInventor) {
-                // APK Kodular -- pakai kamera native Kodular
                 _permitMode = true;
                 window.AppInventor.setWebViewString('openCamera');
             } else {
-                // Browser web -- pakai input file biasa
                 document.getElementById('pFileCameraWeb').click();
             }
         }
@@ -1398,24 +1108,13 @@ function refreshData() {
         function handleWebPermitPhoto(input) {
             if (!input.files || !input.files[0]) return;
             var file = input.files[0];
-
-            // FIX: validasi ukuran file maks 5MB sebelum dibaca/dikirim,
-            // sesuai catatan di komentar header yang sebelumnya belum diterapkan.
-            var MAX_BYTES = 5 * 1024 * 1024;
-            if (file.size > MAX_BYTES) {
-                showToast('Ukuran foto maks 5MB! Foto Anda ' + Math.round(file.size / 1024 / 1024 * 10) / 10 + 'MB');
-                input.value = '';
-                return;
-            }
-
             var reader = new FileReader();
             reader.onload = function(e) {
                 var base64 = e.target.result.split(',')[1];
                 document.getElementById('pFileData').value = base64;
                 document.getElementById('pFileName').value = file.name || 'foto_izin.jpg';
-                document.getElementById('pFileLabel').innerText = '\u2705 Foto berhasil diambil';
+                document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
             };
-            reader.onerror = function() { showToast('Gagal membaca foto.'); };
             reader.readAsDataURL(file);
         }
 
@@ -1446,24 +1145,24 @@ function refreshData() {
                 fileData: pFileData
             };
 
-                google.script.run
-                    .withSuccessHandler(res => {
-                        btn.innerHTML = 'Kirim';
-                        btn.disabled  = false;
-                        if (res && res.success) {
-                            showToast(res.message);
-                            closePermitModal();
-                            refreshData();
-                        } else {
-                            showToast(res ? res.message : "Terjadi kesalahan");
-                        }
-                    })
-                    .withFailureHandler(() => {
-                        btn.innerHTML = 'Kirim';
-                        btn.disabled  = false;
-                        showToast("Gagal mengirim data.");
-                    })
-                    .submitPermit(permitData);
+            google.script.run
+                .withSuccessHandler(res => {
+                    btn.innerHTML = 'Kirim';
+                    btn.disabled  = false;
+                    if (res && res.success) {
+                        showToast(res.message);
+                        closePermitModal();
+                        refreshData();
+                    } else {
+                        showToast(res ? res.message : "Terjadi kesalahan");
+                    }
+                })
+                .withFailureHandler(() => {
+                    btn.innerHTML = 'Kirim';
+                    btn.disabled  = false;
+                    showToast("Gagal mengirim data.");
+                })
+                .submitPermit(permitData);
         }
 
         /* =============================================================
@@ -1499,12 +1198,8 @@ function refreshData() {
             setTimeout(() => t.style.bottom = '-100px', 3000);
         }
 
-        /* FIX: polling WebViewString Kodular diperlambat dari 500ms ke 1000ms
-           untuk mengurangi beban CPU/battery di WebView, dan dihentikan
-           otomatis saat tidak ada user login (tidak perlu polling terus saat
-           di layar login, karena openCamera/foto hanya relevan setelah login). */
+        // Polling WebViewString dari Kodular
         setInterval(function() {
-            if (!user) return; // FIX: stop polling saat tidak ada user
             if (window.AppInventor) {
                 var str = window.AppInventor.getWebViewString();
                 if (str && str !== 'openCamera' && str.length > 100) {
@@ -1512,6 +1207,6 @@ function refreshData() {
                     receivePhoto(str);
                 }
             }
-        }, 1000);
+        }, 500);
 
     </script>
