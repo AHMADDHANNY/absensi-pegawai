@@ -19,7 +19,6 @@
            INIT
         ============================================================= */
         window.onload = () => {
-            startTime();
             initGPS();
 
             const cachedOffice = localStorage.getItem('presensi_office_v3');
@@ -56,6 +55,7 @@
         function setupApp() {
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
+    startTime();
     document.getElementById('userName').innerText = esc(user.nama);
 
     if (user.role === 'admin') {
