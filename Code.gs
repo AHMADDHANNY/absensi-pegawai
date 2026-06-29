@@ -433,9 +433,8 @@ function submitPermit(permitData) {
 
 function updatePermitStatus(id, status) {
   try {
-    // [FIX #5] Validasi status
     const validStatuses = ['Disetujui', 'Ditolak', 'Menunggu'];
-    if (!id)                              return { success: false, message: 'ID izin tidak valid.' };
+    if (!id)                                  return { success: false, message: 'ID izin tidak valid.' };
     if (validStatuses.indexOf(status) === -1) return { success: false, message: 'Status tidak valid.' };
 
     const sheet     = getSheetSafe('Permits');
@@ -445,10 +444,74 @@ function updatePermitStatus(id, status) {
     if (statusCol === -1) return { success: false, message: "Kolom 'status_app' tidak ditemukan." };
 
     for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) == String(id)) {
-        sheet.getRange(i + 1, statusCol + 1).setValue(status);
-        return { success: true };
+      if (String(data[i][0]) != String(id)) continue;
+
+      const prevStatus = String(data[i][statusCol]).trim();
+
+      // Hindari proses ulang kalau status tidak berubah
+      if (prevStatus === status) return { success: true };
+
+      // Simpan status baru di sheet Permits
+      sheet.getRange(i + 1, statusCol + 1).setValue(status);
+
+      // ── Sinkronisasi ke sheet Attendance ──────────────────────────────
+      // Kolom Permits: [0]id [1]userId [2]nama [3]tgl [4]jenis [5]alasan [6]lampiran [7]status_app
+      const permitUserId = String(data[i][1]);
+      const permitNama   = String(data[i][2]);
+      const permitTgl    = formatTgl(data[i][3]);
+      const permitJenis  = String(data[i][4]); // Sakit / Cuti / Izin
+
+      const attSheet = getSheetSafe('Attendance');
+      const attCol   = getAttendanceColumnMap();
+      const attData  = attSheet.getDataRange().getValues();
+
+      if (status === 'Disetujui') {
+        // Cek apakah sudah ada baris di Attendance untuk user + tanggal ini
+        const sudahAda = attData.slice(1).some(function(r) {
+          return String(r[attCol.userId]) == permitUserId &&
+                 formatTgl(r[attCol.tgl]) == permitTgl;
+        });
+
+        if (!sudahAda) {
+          // Tentukan label status berdasarkan jenis izin
+          const statusLabel = (permitJenis === 'Sakit') ? 'Sakit'
+                            : (permitJenis === 'Cuti')  ? 'Cuti'
+                            :                             'Izin';
+
+          const numCols = attSheet.getLastColumn();
+          const row     = new Array(numCols).fill('');
+          row[attCol.id]     = generateId('Attendance');
+          row[attCol.userId] = permitUserId;
+          row[attCol.tgl]    = permitTgl;
+          row[attCol.jamIn]  = '';
+          row[attCol.jamOut] = '';
+          row[attCol.status] = statusLabel;
+          // Isi kolom nama jika ada
+          if (attCol.nama !== undefined && attCol.nama >= 0) row[attCol.nama] = permitNama;
+
+          attSheet.appendRow(row);
+        }
+
+      } else if (status === 'Ditolak' || status === 'Menunggu') {
+        // Kalau sebelumnya Disetujui lalu dibatalkan → hapus baris izin dari Attendance
+        // (hanya hapus baris yang jam masuk & keluar kosong — bukan baris absen nyata)
+        if (prevStatus === 'Disetujui') {
+          const attDataFresh = attSheet.getDataRange().getValues();
+          for (let j = attDataFresh.length - 1; j >= 1; j--) {
+            const r = attDataFresh[j];
+            if (String(r[attCol.userId]) == permitUserId &&
+                formatTgl(r[attCol.tgl]) == permitTgl   &&
+                r[attCol.jamIn]  === ''                  &&
+                r[attCol.jamOut] === '') {
+              attSheet.deleteRow(j + 1);
+              break;
+            }
+          }
+        }
       }
+      // ── Akhir sinkronisasi ────────────────────────────────────────────
+
+      return { success: true };
     }
     return { success: false, message: 'ID Izin tidak ditemukan.' };
   } catch (e) {
