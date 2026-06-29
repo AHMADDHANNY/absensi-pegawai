@@ -54,41 +54,40 @@
            SETUP APP SETELAH LOGIN
         ============================================================= */
         function setupApp() {
-            document.getElementById('loginScreen').classList.add('hidden');
-            document.getElementById('app').classList.remove('hidden');
-            document.getElementById('userName').innerText = esc(user.nama);
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    document.getElementById('userName').innerText = esc(user.nama);
 
-            if (user.role === 'admin') {
-                document.getElementById('nav-setting').classList.remove('hidden');
-                document.getElementById('nav-pegawai').classList.remove('hidden');
-                document.getElementById('nav-log').classList.remove('hidden');
-                document.getElementById('nav-izin').classList.remove('hidden');
-            }
+    if (user.role === 'admin') {
+        document.getElementById('nav-setting').classList.remove('hidden');
+        document.getElementById('nav-pegawai').classList.remove('hidden');
+        document.getElementById('nav-log').classList.remove('hidden');
+        document.getElementById('nav-izin').classList.remove('hidden'); // hanya admin
+    }
+    // Pegawai: tidak ada tab tambahan, hanya HOME dan KELUAR
 
-            setTimeout(() => {
-                refreshData();
-                window.dispatchEvent(new Event('resize'));
-            }, 800);
+    setTimeout(() => {
+        refreshData();
+        window.dispatchEvent(new Event('resize'));
+    }, 800);
 
-            try {
-                google.script.run
-                    .withSuccessHandler(loc => {
-                        if (loc && loc.lat && loc.lng && !loc.error &&
-                            Math.abs(loc.lat) <= 90 && Math.abs(loc.lng) <= 180) {
-                            office = { lat: loc.lat, lng: loc.lng, rad: loc.rad || 100 };
-                            localStorage.setItem('presensi_office_v3', JSON.stringify(office));
-                            initUserMap(office.lat, office.lng, office.rad);
-                            updateGPSUI();
-                        } else if (loc && (loc.error || (loc.lat && Math.abs(loc.lat) > 90))) {
-                            console.warn('getOfficeLocation mengembalikan data tidak valid:', loc);
-                        }
-                    })
-                    .withFailureHandler(err => console.warn('getOfficeLocation gagal:', err))
-                    .getOfficeLocation();
-            } catch (e) {
-                console.warn('getOfficeLocation tidak tersedia:', e);
-            }
-        }
+    try {
+        google.script.run
+            .withSuccessHandler(loc => {
+                if (loc && loc.lat && loc.lng && !loc.error &&
+                    Math.abs(loc.lat) <= 90 && Math.abs(loc.lng) <= 180) {
+                    office = { lat: loc.lat, lng: loc.lng, rad: loc.rad || 100 };
+                    localStorage.setItem('presensi_office_v3', JSON.stringify(office));
+                    initUserMap(office.lat, office.lng, office.rad);
+                    updateGPSUI();
+                }
+            })
+            .withFailureHandler(err => console.warn('getOfficeLocation gagal:', err))
+            .getOfficeLocation();
+    } catch (e) {
+        console.warn('getOfficeLocation tidak tersedia:', e);
+    }
+}
 
         /* =============================================================
            NAVIGASI TAB
@@ -266,87 +265,179 @@
         /* =============================================================
            EXPORT PDF
         ============================================================= */
-        function exportPDF() {
-            var filterBulan   = document.getElementById('filterBulan').value;
-            var filterTanggal = document.getElementById('filterTanggal').value;
+        /* =============================================================
+   EXPORT PDF — rekap per pegawai + detail harian
+   FIX: auto-fetch allIzinData kalau cache kosong
+============================================================= */
+function exportPDF() {
+    var filterBulan   = document.getElementById('filterBulan').value;
+    var filterTanggal = document.getElementById('filterTanggal').value;
 
-            var dataCetak = allLogData;
-            var judulFilter = 'Semua Data';
-            if (filterBulan) {
-                dataCetak = allLogData.filter(function(a) { return a[2] && a[2].startsWith(filterBulan); });
-                var parts = filterBulan.split('-');
-                var bulanNames = ['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
-                judulFilter = 'Bulan ' + bulanNames[parseInt(parts[1])] + ' ' + parts[0];
-            } else if (filterTanggal) {
-                dataCetak = allLogData.filter(function(a) { return a[2] === filterTanggal; });
-                judulFilter = 'Tanggal ' + filterTanggal;
-            }
+    // Tentukan data absensi yang akan dicetak
+    var dataCetak = allLogData;
+    var judulFilter = 'Semua Data';
+    if (filterBulan) {
+        dataCetak = allLogData.filter(function(a) { return a[2] && a[2].startsWith(filterBulan); });
+        var parts = filterBulan.split('-');
+        var bulanNames = ['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+        judulFilter = 'Bulan ' + bulanNames[parseInt(parts[1])] + ' ' + parts[0];
+    } else if (filterTanggal) {
+        dataCetak = allLogData.filter(function(a) { return a[2] === filterTanggal; });
+        judulFilter = 'Tanggal ' + filterTanggal;
+    }
 
-            if (!dataCetak.length) {
-                showToast('Tidak ada data untuk di-export!');
-                return;
-            }
+    if (!dataCetak.length) {
+        showToast('Tidak ada data untuk di-export!');
+        return;
+    }
 
-            var totalHadir = dataCetak.filter(function(a) { return (a[9] || 'Hadir') === 'Hadir'; }).length;
-            var totalIzin  = dataCetak.length - totalHadir;
-            var printed    = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    // Kalau cache izin kosong, fetch dulu dari server sebelum generate PDF
+    if (!allIzinData || !allIzinData.length) {
+        showToast('⏳ Memuat data izin, harap tunggu...');
+        google.script.run
+            .withSuccessHandler(function(res) {
+                if (res && res.allPermits) allIzinData = res.allPermits;
+                _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
+            })
+            .withFailureHandler(function() {
+                // Tetap generate PDF meski izin gagal diambil — rekap izin akan 0
+                _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
+            })
+            .getDashboardData(user.id, user.role);
+    } else {
+        _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
+    }
+}
 
-            var rows = dataCetak.map(function(a, i) {
-                var status = a[9] || 'Hadir';
-                var statusColor = status === 'Hadir' ? '#10b981' : '#f59e0b';
-                return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';">' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">' + (i+1) + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(a[13] || '-') + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">' + esc(a[2] || '-') + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;color:#6366f1;font-weight:700;">' + esc(a[3] || '-') + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;color:#ef4444;font-weight:700;">' + esc(a[4] || '--:--') + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;"><span style="background:' + statusColor + '22;color:' + statusColor + ';padding:2px 8px;border-radius:6px;font-size:10px;font-weight:800;">' + esc(status) + '</span></td>' +
-                '</tr>';
-            }).join('');
+function _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal) {
+    // Filter data izin sesuai periode yang dipilih
+    var izinCetak = (allIzinData || []).filter(function(p) {
+        var tgl = p[3] || '';
+        if (!tgl) return false;
+        if (filterTanggal) return tgl === filterTanggal;
+        if (filterBulan)   return tgl.startsWith(filterBulan);
+        return true;
+    });
 
-            var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
-                '<title>Log Absensi - ' + judulFilter + '</title>' +
-                '<style>' +
-                    'body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1e293b;}' +
-                    'h1{font-size:20px;font-weight:900;margin:0;color:#1e293b;}' +
-                    'h2{font-size:13px;font-weight:600;color:#6366f1;margin:4px 0 0;}' +
-                    '.header{border-bottom:3px solid #6366f1;padding-bottom:12px;margin-bottom:16px;}' +
-                    '.stats{display:flex;gap:16px;margin-bottom:16px;}' +
-                    '.stat{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;text-align:center;}' +
-                    '.stat-num{font-size:22px;font-weight:900;color:#6366f1;}' +
-                    '.stat-lbl{font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;}' +
-                    'table{width:100%;border-collapse:collapse;font-size:12px;}' +
-                    'thead tr{background:#1e293b;color:white;}' +
-                    'thead th{padding:10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;}' +
-                    '.footer{margin-top:16px;font-size:10px;color:#94a3b8;text-align:right;}' +
-                    '@media print{body{padding:10px;}button{display:none!important;}}' +
-                '</style></head><body>' +
-                '<div class="header">' +
-                    '<h1>📋 Laporan Log Absensi</h1>' +
-                    '<h2>Presensi Solider &nbsp;|&nbsp; ' + judulFilter + '</h2>' +
-                '</div>' +
-                '<div class="stats">' +
-                    '<div class="stat"><div class="stat-num">' + dataCetak.length + '</div><div class="stat-lbl">Total Data</div></div>' +
-                    '<div class="stat"><div class="stat-num" style="color:#10b981;">' + totalHadir + '</div><div class="stat-lbl">Hadir</div></div>' +
-                    '<div class="stat"><div class="stat-num" style="color:#f59e0b;">' + totalIzin + '</div><div class="stat-lbl">Izin/Lainnya</div></div>' +
-                '</div>' +
-                '<table>' +
-                    '<thead><tr><th>#</th><th>Nama</th><th>Tanggal</th><th>Jam Masuk</th><th>Jam Keluar</th><th>Status</th></tr></thead>' +
-                    '<tbody>' + rows + '</tbody>' +
-                '</table>' +
-                '<div class="footer">Dicetak pada ' + printed + ' &nbsp;|&nbsp; Presensi Solider</div>' +
-                '<br><button onclick="window.print()" style="background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">🖨️ Cetak / Save PDF</button>' +
-                '</body></html>';
+    // === REKAP PER PEGAWAI ===
+    var rekapMap = {};
 
-            var win = window.open('', '_blank');
-            if (!win) {
-                showToast('Popup diblokir! Izinkan popup di browser.');
-                return;
-            }
-            win.document.write(html);
-            win.document.close();
-            win.focus();
-        }
+    // Isi dari data absensi
+    dataCetak.forEach(function(a) {
+        var nama   = a[13] || 'Anonim';
+        var status = a[9]  || 'Hadir';
+        if (!rekapMap[nama]) rekapMap[nama] = { hadir: 0, sakit: 0, cuti: 0, izinLain: 0 };
+        if (status === 'Hadir') rekapMap[nama].hadir++;
+    });
+
+    // Isi dari data izin (hanya yang Disetujui)
+    izinCetak.forEach(function(p) {
+        var nama   = p[2] || 'Anonim';
+        var jenis  = p[4] || '';
+        var status = p[7] || '';
+        if (status !== 'Disetujui') return;
+        if (!rekapMap[nama]) rekapMap[nama] = { hadir: 0, sakit: 0, cuti: 0, izinLain: 0 };
+        if (jenis === 'Sakit')       rekapMap[nama].sakit++;
+        else if (jenis === 'Cuti')   rekapMap[nama].cuti++;
+        else                         rekapMap[nama].izinLain++;
+    });
+
+    // Baris tabel rekap
+    var rekapRows = Object.keys(rekapMap).sort().map(function(nama, i) {
+        var r = rekapMap[nama];
+        var totalTdk = r.sakit + r.cuti + r.izinLain;
+        return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';page-break-inside:avoid;">' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(nama) + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#10b981;font-weight:800;">' + r.hadir + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#ef4444;font-weight:700;">' + r.sakit + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#0ea5e9;font-weight:700;">' + r.cuti + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#f59e0b;font-weight:700;">' + r.izinLain + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#6366f1;font-weight:800;">' + (r.hadir + totalTdk) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    // === STATISTIK RINGKASAN ===
+    var totalHadir = dataCetak.filter(function(a) { return (a[9] || 'Hadir') === 'Hadir'; }).length;
+    var totalIzinDisetujui = izinCetak.filter(function(p) { return p[7] === 'Disetujui'; }).length;
+    var printed = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+
+    // === BARIS TABEL DETAIL HARIAN ===
+    var rows = dataCetak.map(function(a, i) {
+        var status = a[9] || 'Hadir';
+        var statusColor = status === 'Hadir' ? '#10b981' : '#f59e0b';
+        return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';page-break-inside:avoid;">' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;">' + (i+1) + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(a[13] || '-') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;">' + esc(a[2] || '-') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;color:#6366f1;font-weight:700;">' + esc(a[3] || '-') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;color:#ef4444;font-weight:700;">' + esc(a[4] || '--:--') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;"><span style="background:' + statusColor + '22;color:' + statusColor + ';padding:2px 8px;border-radius:6px;font-size:10px;font-weight:800;">' + esc(status) + '</span></td>' +
+        '</tr>';
+    }).join('');
+
+    // === BANGUN HTML PDF ===
+    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+        '<title>Laporan Absensi - ' + judulFilter + '</title>' +
+        '<style>' +
+            'body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1e293b;}' +
+            'h1{font-size:20px;font-weight:900;margin:0;color:#1e293b;}' +
+            'h2{font-size:13px;font-weight:600;color:#6366f1;margin:4px 0 0;}' +
+            'h3{font-size:12px;font-weight:800;color:#1e293b;margin:20px 0 8px;text-transform:uppercase;letter-spacing:0.5px;}' +
+            '.header{border-bottom:3px solid #6366f1;padding-bottom:12px;margin-bottom:16px;}' +
+            '.stats{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;}' +
+            '.stat{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;text-align:center;min-width:80px;}' +
+            '.stat-num{font-size:22px;font-weight:900;color:#6366f1;}' +
+            '.stat-lbl{font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;}' +
+            'table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:24px;}' +
+            'thead tr{background:#1e293b;color:white;}' +
+            'thead th{padding:9px 10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;}' +
+            'thead th.num{text-align:center;}' +
+            'tbody tr{page-break-inside:avoid;}' +
+            '.footer{margin-top:16px;font-size:10px;color:#94a3b8;text-align:right;}' +
+            '@media print{body{padding:10px;}button{display:none!important;}.no-break{page-break-inside:avoid;}}' +
+        '</style></head><body>' +
+        '<div class="header">' +
+            '<h1>📋 Laporan Absensi Pegawai</h1>' +
+            '<h2>Presensi Solider &nbsp;|&nbsp; ' + judulFilter + '</h2>' +
+        '</div>' +
+        '<div class="stats">' +
+            '<div class="stat"><div class="stat-num">' + Object.keys(rekapMap).length + '</div><div class="stat-lbl">Pegawai</div></div>' +
+            '<div class="stat"><div class="stat-num" style="color:#10b981;">' + totalHadir + '</div><div class="stat-lbl">Total Hadir</div></div>' +
+            '<div class="stat"><div class="stat-num" style="color:#f59e0b;">' + totalIzinDisetujui + '</div><div class="stat-lbl">Total Izin</div></div>' +
+            '<div class="stat"><div class="stat-num" style="color:#64748b;">' + dataCetak.length + '</div><div class="stat-lbl">Total Entri</div></div>' +
+        '</div>' +
+        '<h3>📊 Rekap Per Pegawai</h3>' +
+        (rekapRows ? (
+            '<table>' +
+                '<thead><tr>' +
+                    '<th>Nama Pegawai</th>' +
+                    '<th class="num">Hadir</th>' +
+                    '<th class="num">Sakit</th>' +
+                    '<th class="num">Cuti</th>' +
+                    '<th class="num">Izin Lain</th>' +
+                    '<th class="num">Total Hari</th>' +
+                '</tr></thead>' +
+                '<tbody>' + rekapRows + '</tbody>' +
+            '</table>'
+        ) : '<p style="font-size:11px;color:#94a3b8;">Tidak ada data.</p>') +
+        '<h3>🗒️ Detail Harian</h3>' +
+        '<table>' +
+            '<thead><tr><th>#</th><th>Nama</th><th>Tanggal</th><th>Jam Masuk</th><th>Jam Keluar</th><th>Status</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+        '</table>' +
+        '<div class="footer">Dicetak pada ' + printed + ' &nbsp;|&nbsp; Presensi Solider</div>' +
+        '<br><button onclick="window.print()" style="background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">🖨️ Cetak / Save PDF</button>' +
+        '</body></html>';
+
+    var win = window.open('', '_blank');
+    if (!win) {
+        showToast('Popup diblokir! Izinkan popup di browser.');
+        return;
+    }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+}
 
         /* =============================================================
            LOGIN & LOGOUT
@@ -401,102 +492,96 @@ function closeLogoutModal() {
 }
 
         function doLogout() {
-            localStorage.removeItem('presensi_user_v3');
-            user = null;
+    closeLogoutModal();
+    localStorage.removeItem('presensi_user_v3');
+    user = null;
 
-            userMap = null;
-            adminMap = null;
-            userPosMarker = null;
-            userOfficeCircle = null;
-            userOfficeMarker = null;
-            adminMarker = null;
-            adminCircle = null;
-            hasInitialGPSFix = false;
-            const mc = document.getElementById('user-map');
-            if (mc) mc.innerHTML = '';
+    // reset map
+    userMap = null; adminMap = null;
+    userPosMarker = null; userOfficeCircle = null;
+    userOfficeMarker = null; adminMarker = null;
+    adminCircle = null; hasInitialGPSFix = false;
+    const mc = document.getElementById('user-map');
+    if (mc) mc.innerHTML = '';
 
-            document.getElementById('loginPhone').value = '';
-            document.getElementById('loginPass').value  = '';
-            document.getElementById('btnLogin').innerHTML = 'MASUK SEKARANG';
-            document.getElementById('btnLogin').disabled  = false;
+    document.getElementById('loginPhone').value   = '';
+    document.getElementById('loginPass').value    = '';
+    document.getElementById('btnLogin').innerHTML = 'MASUK SEKARANG';
+    document.getElementById('btnLogin').disabled  = false;
 
-            document.getElementById('nav-setting').classList.add('hidden');
-            document.getElementById('nav-pegawai').classList.add('hidden');
-            document.getElementById('nav-log').classList.add('hidden');
-            document.getElementById('nav-izin').classList.add('hidden');
+    // Sembunyikan semua tab termasuk izin
+    ['nav-setting', 'nav-pegawai', 'nav-log', 'nav-izin'].forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+    });
 
-            switchTab('home');
-            document.getElementById('app').classList.add('hidden');
-            document.getElementById('loginScreen').classList.remove('hidden');
-        }
+    switchTab('home');
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('loginScreen').classList.remove('hidden');
+}
 
         /* =============================================================
            KAMERA & SELFIE
         ============================================================= */
         function handleAttendanceClick(type, event) {
-            attType = type;
-            const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
-            if (dist > office.rad) {
-                event.preventDefault();
-                return showToast("Gagal: Anda berada di luar radius kantor!");
-            }
-            if (window.AppInventor) {
-                event.preventDefault();
-                window.AppInventor.setWebViewString("openCamera");
-                return;
-            }
-            event.preventDefault();
-            var inputId = (type === 'IN') ? 'cameraInputMasuk' : 'cameraInputKeluar';
-            document.getElementById(inputId).click();
+    attType = type;
+    showToast("DEBUG: tap " + type + " | AppInventor=" + (!!window.AppInventor));
+    
+    const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
+    if (dist > office.rad) {
+        event.preventDefault();
+        return showToast("Gagal: Anda berada di luar radius kantor!");
+    }
+    if (window.AppInventor) {
+        event.preventDefault();
+        window.AppInventor.setWebViewString("openCamera");
+        showToast("DEBUG: setWebViewString openCamera terkirim");
+        return;
+    }
+    showToast("DEBUG: mode browser, label dibuka");
+}
+
+function receivePhoto(base64Data) {
+    showToast("DEBUG: receivePhoto masuk, panjang=" + base64Data.length + " permitMode=" + _permitMode + " attType=" + attType);
+    
+    if (!base64Data || base64Data.length < 100) {
+        showToast("Foto tidak valid, coba lagi.");
+        return;
+    }
+    if (_permitMode) {
+        _permitMode = false;
+        document.getElementById('pFileData').value = base64Data;
+        document.getElementById('pFileName').value = 'foto_izin.jpg';
+        document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
+        return;
+    }
+    if (!attType) {
+        showToast("DEBUG ERROR: attType kosong!");
+        return;
+    }
+    showToast("📷 Foto diterima, memproses...");
+    var dataUrl = 'data:image/jpeg;base64,' + base64Data;
+    var can = document.getElementById('canvas');
+    var img = new Image();
+    img.onload = function() {
+        showToast("DEBUG: gambar berhasil load, kompres...");
+        var maxW  = 480;
+        var scale = (img.width > maxW) ? maxW / img.width : 1;
+        can.width  = img.width  * scale;
+        can.height = img.height * scale;
+        can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
+        var dataUrl2 = can.toDataURL('image/jpeg', 0.4);
+        var sizeKB   = Math.round(dataUrl2.length * 0.75 / 1024);
+        showToast("DEBUG: ukuran foto " + sizeKB + "KB");
+        if (sizeKB > 4500) {
+            showToast("Foto terlalu besar (" + sizeKB + "KB), coba lagi.");
+            return;
         }
+        kirimAbsensi(dataUrl2);
+    };
+    img.onerror = function() { showToast("DEBUG ERROR: img.onerror terpanggil"); };
+    img.src = dataUrl;
+}
 
-        function handleCameraChange(type, input) {
-            if (!input.files || !input.files[0]) return;
-            attType = type;
-            var file = input.files[0];
-            var reader = new FileReader();
-            reader.onload = function (ev) {
-                var img = new Image();
-                img.onload = function () {
-                    var can  = document.getElementById('canvas');
-                    var maxW  = 480;
-                    var scale = (img.width > maxW) ? maxW / img.width : 1;
-                    can.width  = img.width  * scale;
-                    can.height = img.height * scale;
-                    can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
-                    var dataUrl = can.toDataURL('image/jpeg', 0.4);
-
-                    var sizeKB = Math.round(dataUrl.length * 0.75 / 1024);
-                    if (sizeKB > 4500) {
-                        showToast("Foto terlalu besar (" + sizeKB + "KB), coba lagi.");
-                        return;
-                    }
-
-                    showToast("📤 Mengirim absensi... mohon tunggu");
-
-                    var timeoutId = setTimeout(function() {
-                        showToast("⏱ Server lambat merespons. Cek riwayat absensi Anda.");
-                    }, 35000);
-
-                    google.script.run
-                        .withSuccessHandler(function (res) {
-                            clearTimeout(timeoutId);
-                            showToast(res.message);
-                            if (res.success) refreshData();
-                        })
-                        .withFailureHandler(function (err) {
-                            clearTimeout(timeoutId);
-                            showToast("Gagal kirim absensi. Coba lagi.");
-                            console.error("submitAttendance error:", err);
-                        })
-                        .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl);
-                };
-                img.onerror = function() { showToast("Gagal memuat foto."); };
-                img.src = ev.target.result;
-            };
-            reader.onerror = function() { showToast("FileReader error."); };
-            reader.readAsDataURL(file);
-        }
 
         /* =============================================================
            FETCH DATA DASHBOARD
@@ -965,19 +1050,32 @@ function closeLogoutModal() {
         ============================================================= */
         var allIzinData = [];
 
-        function loadAdminIzin() {
-            const listEl = document.getElementById('adminIzinList');
-            listEl.innerHTML = '<p class="text-center text-xs py-8 text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>Memuat data...</p>';
-            google.script.run
-                .withSuccessHandler(function(res) {
-                    allIzinData = (res && res.allPermits) ? res.allPermits : [];
-                    applyIzinFilter();
-                })
-                .withFailureHandler(function() {
-                    listEl.innerHTML = '<p class="text-center text-xs py-8 text-red-400">Gagal memuat data izin</p>';
-                })
-                .getDashboardData(user.id, user.role);
-        }
+        // ② loadAdminIzin — filter allPermits berdasarkan role
+function loadAdminIzin() {
+    const listEl = document.getElementById('adminIzinList');
+    listEl.innerHTML = '<p class="text-center text-xs py-8 text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>Memuat data...</p>';
+    google.script.run
+        .withSuccessHandler(function(res) {
+            const allData = (res && res.allPermits) ? res.allPermits : [];
+
+            // Pegawai hanya lihat izin milik sendiri
+            allIzinData = (user.role === 'admin')
+                ? allData
+                : allData.filter(function(p) { return String(p[1]) === String(user.id); });
+
+            // Sembunyikan/tampilkan filter panel sesuai role
+            const filterPanel = document.getElementById('izinFilterPanel');
+            if (filterPanel) {
+                filterPanel.classList.toggle('hidden', user.role !== 'admin');
+            }
+
+            applyIzinFilter();
+        })
+        .withFailureHandler(function() {
+            listEl.innerHTML = '<p class="text-center text-xs py-8 text-red-400">Gagal memuat data izin</p>';
+        })
+        .getDashboardData(user.id, user.role);
+}
 
         function applyIzinFilter() {
             const filterStatus = document.getElementById('filterIzinStatus').value;
@@ -996,70 +1094,88 @@ function closeLogoutModal() {
             renderAdminIzin(allIzinData);
         }
 
-        function renderAdminIzin(data) {
-            document.getElementById('izinCount').innerText = 'Total: ' + data.length + ' data';
-            const listEl = document.getElementById('adminIzinList');
-            if (!data.length) {
-                listEl.innerHTML = '<p class="text-center text-xs py-8 text-gray-400">Tidak ada data izin</p>';
-                return;
-            }
-            listEl.innerHTML = data.map(function(p) {
-                const id        = p[0];
-                const nama      = esc(p[2] || 'Anonim');
-                const tgl       = esc(p[3] || '-');
-                const jenis     = esc(p[4] || '-');
-                const alasan    = esc(p[5] || '-');
-                const lampiran  = p[6] || '';
-                const status    = p[7] || 'Menunggu';
+        // ③ renderAdminIzin — tombol approve/tolak hanya admin,
+//    pegawai hanya lihat status
+function renderAdminIzin(data) {
+    document.getElementById('izinCount').innerText = 'Total: ' + data.length + ' data';
+    const listEl = document.getElementById('adminIzinList');
+    if (!data.length) {
+        listEl.innerHTML = user.role === 'admin'
+            ? '<p class="text-center text-xs py-8 text-gray-400">Tidak ada data izin</p>'
+            : '<p class="text-center text-xs py-8 text-gray-400">Belum ada pengajuan izin</p>';
+        return;
+    }
+    listEl.innerHTML = data.map(function(p) {
+        const id       = p[0];
+        const nama     = esc(p[2] || 'Anonim');
+        const tgl      = esc(p[3] || '-');
+        const jenis    = esc(p[4] || '-');
+        const alasan   = esc(p[5] || '-');
+        const lampiran = p[6] || '';
+        const status   = p[7] || 'Menunggu';
 
-                const scBadge = status === 'Disetujui'
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : status === 'Ditolak'
-                        ? 'bg-red-100 text-red-600'
-                        : 'bg-amber-100 text-amber-700';
-                const jenisIcon = jenis === 'Sakit'
-                    ? 'fa-notes-medical text-red-400'
-                    : jenis === 'Cuti'
-                        ? 'fa-umbrella-beach text-sky-400'
-                        : 'fa-file-medical text-amber-400';
+        const scBadge = status === 'Disetujui'
+            ? 'bg-emerald-100 text-emerald-700'
+            : status === 'Ditolak'
+                ? 'bg-red-100 text-red-600'
+                : 'bg-amber-100 text-amber-700';
+        const jenisIcon = jenis === 'Sakit'
+            ? 'fa-notes-medical text-red-400'
+            : jenis === 'Cuti'
+                ? 'fa-umbrella-beach text-sky-400'
+                : 'fa-file-medical text-amber-400';
 
-                const btnApprove = status === 'Menunggu'
-                    ? `<button onclick="updateIzinStatus('${id}','Disetujui')"
-                            class="flex-1 bg-emerald-500 text-white py-2.5 rounded-xl text-[10px] font-bold active:scale-95 transition-all shadow-sm">
-                            <i class="fas fa-check mr-1"></i> Setujui
-                       </button>
-                       <button onclick="updateIzinStatus('${id}','Ditolak')"
-                            class="flex-1 bg-red-500 text-white py-2.5 rounded-xl text-[10px] font-bold active:scale-95 transition-all shadow-sm">
-                            <i class="fas fa-times mr-1"></i> Tolak
-                       </button>`
-                    : `<span class="flex-1 text-center text-[10px] font-bold text-gray-400 py-2">Sudah diproses</span>`;
-
-                return `
-                <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
-                    <div class="flex items-start gap-3">
-                        <div class="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center flex-shrink-0">
-                            <i class="fas ${jenisIcon} text-base"></i>
-                        </div>
-                        <div class="flex-1 min-w-0">
-                            <div class="flex justify-between items-center mb-0.5">
-                                <h4 class="font-black text-gray-900 text-sm truncate">${nama}</h4>
-                                <span class="ml-2 px-2 py-0.5 rounded-lg text-[9px] font-black uppercase flex-shrink-0 ${scBadge}">${esc(status)}</span>
-                            </div>
-                            <p class="text-[10px] font-bold text-indigo-600">${tgl} • ${jenis}</p>
-                            <p class="text-[10px] text-gray-500 mt-0.5 line-clamp-2">${alasan}</p>
-                        </div>
-                    </div>
-                    ${lampiran ? `
-                    <div class="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-xl">
-                        <i class="fas fa-paperclip text-gray-400 text-xs"></i>
-                        <a href="${lampiran}" target="_blank" class="text-[10px] font-bold text-indigo-600 truncate underline">Lihat Lampiran</a>
-                    </div>` : ''}
-                    <div class="flex gap-2 pt-1 border-t border-dashed border-gray-100">
-                        ${btnApprove}
-                    </div>
-                </div>`;
-            }).join('');
+        // Tombol approve/tolak HANYA untuk admin
+        let actionHtml = '';
+        if (user.role === 'admin') {
+            actionHtml = status === 'Menunggu'
+                ? `<button onclick="updateIzinStatus('${id}','Disetujui')"
+                        class="flex-1 bg-emerald-500 text-white py-2.5 rounded-xl text-[10px] font-bold active:scale-95 transition-all shadow-sm">
+                        <i class="fas fa-check mr-1"></i> Setujui
+                   </button>
+                   <button onclick="updateIzinStatus('${id}','Ditolak')"
+                        class="flex-1 bg-red-500 text-white py-2.5 rounded-xl text-[10px] font-bold active:scale-95 transition-all shadow-sm">
+                        <i class="fas fa-times mr-1"></i> Tolak
+                   </button>`
+                : `<span class="flex-1 text-center text-[10px] font-bold text-gray-400 py-2">Sudah diproses</span>`;
+        } else {
+            // Pegawai: hanya tampilkan keterangan status
+            actionHtml = `<span class="flex-1 text-center text-[10px] font-bold text-gray-400 py-2">
+                ${status === 'Menunggu' ? 'Menunggu persetujuan admin' : 'Sudah diproses'}
+            </span>`;
         }
+
+        // Nama hanya tampil untuk admin (pegawai sudah tahu ini izin mereka sendiri)
+        const namaRow = user.role === 'admin'
+            ? `<h4 class="font-black text-gray-900 text-sm truncate">${nama}</h4>`
+            : '';
+
+        return `
+        <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+            <div class="flex items-start gap-3">
+                <div class="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center flex-shrink-0">
+                    <i class="fas ${jenisIcon} text-base"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="flex justify-between items-center mb-0.5">
+                        ${namaRow}
+                        <span class="ml-2 px-2 py-0.5 rounded-lg text-[9px] font-black uppercase flex-shrink-0 ${scBadge}">${esc(status)}</span>
+                    </div>
+                    <p class="text-[10px] font-bold text-indigo-600">${tgl} • ${jenis}</p>
+                    <p class="text-[10px] text-gray-500 mt-0.5 line-clamp-2">${alasan}</p>
+                </div>
+            </div>
+            ${lampiran ? `
+            <div class="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-xl">
+                <i class="fas fa-paperclip text-gray-400 text-xs"></i>
+                <a href="${lampiran}" target="_blank" class="text-[10px] font-bold text-indigo-600 truncate underline">Lihat Lampiran</a>
+            </div>` : ''}
+            <div class="flex gap-2 pt-1 border-t border-dashed border-gray-100">
+                ${actionHtml}
+            </div>
+        </div>`;
+    }).join('');
+}
 
         function updateIzinStatus(id, status) {
             // FIX: confirm() diblokir WebViewer — skip konfirmasi di Kodular
