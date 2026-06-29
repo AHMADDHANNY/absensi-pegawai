@@ -340,109 +340,178 @@
         }
 
         /* =============================================================
-           EXPORT PDF — pakai window.print() dengan CSS print khusus
-           FIX: tambah warning konfirmasi jika data > 500 baris, karena
-           window.print() dengan ribuan baris bisa membuat browser hang
-           atau render sangat lambat di device low-end (terutama WebView
-           Kodular). User diberi pilihan lanjut atau batal.
-        ============================================================= */
-        function exportPDF() {
-            var filterBulan   = document.getElementById('filterBulan').value;
-            var filterTanggal = document.getElementById('filterTanggal').value;
+   EXPORT PDF — rekap per pegawai + detail harian
+   FIX: auto-fetch allIzinData kalau cache kosong
+============================================================= */
+function exportPDF() {
+    var filterBulan   = document.getElementById('filterBulan').value;
+    var filterTanggal = document.getElementById('filterTanggal').value;
 
-            // Tentukan data yang akan dicetak
-            var dataCetak = allLogData;
-            var judulFilter = 'Semua Data';
-            if (filterBulan) {
-                dataCetak = allLogData.filter(function(a) { return a[2] && a[2].startsWith(filterBulan); });
-                var parts = filterBulan.split('-');
-                var bulanNames = ['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
-                judulFilter = 'Bulan ' + bulanNames[parseInt(parts[1])] + ' ' + parts[0];
-            } else if (filterTanggal) {
-                dataCetak = allLogData.filter(function(a) { return a[2] === filterTanggal; });
-                judulFilter = 'Tanggal ' + filterTanggal;
-            }
+    // Tentukan data absensi yang akan dicetak
+    var dataCetak = allLogData;
+    var judulFilter = 'Semua Data';
+    if (filterBulan) {
+        dataCetak = allLogData.filter(function(a) { return a[2] && a[2].startsWith(filterBulan); });
+        var parts = filterBulan.split('-');
+        var bulanNames = ['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+        judulFilter = 'Bulan ' + bulanNames[parseInt(parts[1])] + ' ' + parts[0];
+    } else if (filterTanggal) {
+        dataCetak = allLogData.filter(function(a) { return a[2] === filterTanggal; });
+        judulFilter = 'Tanggal ' + filterTanggal;
+    }
 
-            if (!dataCetak.length) {
-                showToast('Tidak ada data untuk di-export!');
-                return;
-            }
+    if (!dataCetak.length) {
+        showToast('Tidak ada data untuk di-export!');
+        return;
+    }
 
-            // FIX: warning jika data terlalu banyak
-            var MAX_SAFE_EXPORT = 500;
-            if (dataCetak.length > MAX_SAFE_EXPORT) {
-                var lanjut = confirm(
-                    '⚠️ Data yang akan di-export ada ' + dataCetak.length + ' baris.\n' +
-                    'Export data sebanyak ini bisa membuat browser lambat atau macet,\n' +
-                    'terutama di HP. Disarankan filter per bulan/tanggal dulu.\n\n' +
-                    'Tetap lanjutkan export semua data ini?'
-                );
-                if (!lanjut) return;
-            }
+    // Kalau cache izin kosong, fetch dulu dari server sebelum generate PDF
+    if (!allIzinData || !allIzinData.length) {
+        showToast('⏳ Memuat data izin, harap tunggu...');
+        google.script.run
+            .withSuccessHandler(function(res) {
+                if (res && res.allPermits) allIzinData = res.allPermits;
+                _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
+            })
+            .withFailureHandler(function() {
+                // Tetap generate PDF meski izin gagal diambil — rekap izin akan 0
+                _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
+            })
+            .getDashboardData(user.id, user.role);
+    } else {
+        _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
+    }
+}
 
-            // Hitung statistik
-            var totalHadir = dataCetak.filter(function(a) { return (a[9] || 'Hadir') === 'Hadir'; }).length;
-            var totalIzin  = dataCetak.length - totalHadir;
-            var printed    = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+function _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal) {
+    // Filter data izin sesuai periode yang dipilih
+    var izinCetak = (allIzinData || []).filter(function(p) {
+        var tgl = p[3] || '';
+        if (!tgl) return false;
+        if (filterTanggal) return tgl === filterTanggal;
+        if (filterBulan)   return tgl.startsWith(filterBulan);
+        return true;
+    });
 
-            // Buat isi tabel
-            var rows = dataCetak.map(function(a, i) {
-                var status = a[9] || 'Hadir';
-                var statusColor = status === 'Hadir' ? '#10b981' : '#f59e0b';
-                return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';">' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">' + (i+1) + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(a[13] || '-') + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">' + esc(a[2] || '-') + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;color:#6366f1;font-weight:700;">' + esc(a[3] || '-') + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;color:#ef4444;font-weight:700;">' + esc(a[4] || '--:--') + '</td>' +
-                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;"><span style="background:' + statusColor + '22;color:' + statusColor + ';padding:2px 8px;border-radius:6px;font-size:10px;font-weight:800;">' + esc(status) + '</span></td>' +
-                '</tr>';
-            }).join('');
+    // === REKAP PER PEGAWAI ===
+    var rekapMap = {};
 
-            // Buat halaman print
-            var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
-                '<title>Log Absensi - ' + judulFilter + '</title>' +
-                '<style>' +
-                    'body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1e293b;}' +
-                    'h1{font-size:20px;font-weight:900;margin:0;color:#1e293b;}' +
-                    'h2{font-size:13px;font-weight:600;color:#6366f1;margin:4px 0 0;}' +
-                    '.header{border-bottom:3px solid #6366f1;padding-bottom:12px;margin-bottom:16px;}' +
-                    '.stats{display:flex;gap:16px;margin-bottom:16px;}' +
-                    '.stat{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;text-align:center;}' +
-                    '.stat-num{font-size:22px;font-weight:900;color:#6366f1;}' +
-                    '.stat-lbl{font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;}' +
-                    'table{width:100%;border-collapse:collapse;font-size:12px;}' +
-                    'thead tr{background:#1e293b;color:white;}' +
-                    'thead th{padding:10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;}' +
-                    '.footer{margin-top:16px;font-size:10px;color:#94a3b8;text-align:right;}' +
-                    '@media print{body{padding:10px;}button{display:none!important;}}' +
-                '</style></head><body>' +
-                '<div class="header">' +
-                    '<h1>📋 Laporan Log Absensi</h1>' +
-                    '<h2>Presensi Solider &nbsp;|&nbsp; ' + judulFilter + '</h2>' +
-                '</div>' +
-                '<div class="stats">' +
-                    '<div class="stat"><div class="stat-num">' + dataCetak.length + '</div><div class="stat-lbl">Total Data</div></div>' +
-                    '<div class="stat"><div class="stat-num" style="color:#10b981;">' + totalHadir + '</div><div class="stat-lbl">Hadir</div></div>' +
-                    '<div class="stat"><div class="stat-num" style="color:#f59e0b;">' + totalIzin + '</div><div class="stat-lbl">Izin/Lainnya</div></div>' +
-                '</div>' +
-                '<table>' +
-                    '<thead><tr><th>#</th><th>Nama</th><th>Tanggal</th><th>Jam Masuk</th><th>Jam Keluar</th><th>Status</th></tr></thead>' +
-                    '<tbody>' + rows + '</tbody>' +
-                '</table>' +
-                '<div class="footer">Dicetak pada ' + printed + ' &nbsp;|&nbsp; Presensi Solider</div>' +
-                '<br><button onclick="window.print()" style="background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">🖨️ Cetak / Save PDF</button>' +
-                '</body></html>';
+    // Isi dari data absensi
+    dataCetak.forEach(function(a) {
+        var nama   = a[13] || 'Anonim';
+        var status = a[9]  || 'Hadir';
+        if (!rekapMap[nama]) rekapMap[nama] = { hadir: 0, sakit: 0, cuti: 0, izinLain: 0 };
+        if (status === 'Hadir') rekapMap[nama].hadir++;
+    });
 
-            var win = window.open('', '_blank');
-            if (!win) {
-                showToast('Popup diblokir! Izinkan popup di browser.');
-                return;
-            }
-            win.document.write(html);
-            win.document.close();
-            win.focus();
-        }
+    // Isi dari data izin (hanya yang Disetujui)
+    izinCetak.forEach(function(p) {
+        var nama   = p[2] || 'Anonim';
+        var jenis  = p[4] || '';
+        var status = p[7] || '';
+        if (status !== 'Disetujui') return;
+        if (!rekapMap[nama]) rekapMap[nama] = { hadir: 0, sakit: 0, cuti: 0, izinLain: 0 };
+        if (jenis === 'Sakit')       rekapMap[nama].sakit++;
+        else if (jenis === 'Cuti')   rekapMap[nama].cuti++;
+        else                         rekapMap[nama].izinLain++;
+    });
+
+    // Baris tabel rekap
+    var rekapRows = Object.keys(rekapMap).sort().map(function(nama, i) {
+        var r = rekapMap[nama];
+        var totalTdk = r.sakit + r.cuti + r.izinLain;
+        return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';page-break-inside:avoid;">' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(nama) + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#10b981;font-weight:800;">' + r.hadir + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#ef4444;font-weight:700;">' + r.sakit + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#0ea5e9;font-weight:700;">' + r.cuti + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#f59e0b;font-weight:700;">' + r.izinLain + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#6366f1;font-weight:800;">' + (r.hadir + totalTdk) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    // === STATISTIK RINGKASAN ===
+    var totalHadir = dataCetak.filter(function(a) { return (a[9] || 'Hadir') === 'Hadir'; }).length;
+    var totalIzinDisetujui = izinCetak.filter(function(p) { return p[7] === 'Disetujui'; }).length;
+    var printed = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+
+    // === BARIS TABEL DETAIL HARIAN ===
+    var rows = dataCetak.map(function(a, i) {
+        var status = a[9] || 'Hadir';
+        var statusColor = status === 'Hadir' ? '#10b981' : '#f59e0b';
+        return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';page-break-inside:avoid;">' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;">' + (i+1) + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(a[13] || '-') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;">' + esc(a[2] || '-') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;color:#6366f1;font-weight:700;">' + esc(a[3] || '-') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;color:#ef4444;font-weight:700;">' + esc(a[4] || '--:--') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;"><span style="background:' + statusColor + '22;color:' + statusColor + ';padding:2px 8px;border-radius:6px;font-size:10px;font-weight:800;">' + esc(status) + '</span></td>' +
+        '</tr>';
+    }).join('');
+
+    // === BANGUN HTML PDF ===
+    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+        '<title>Laporan Absensi - ' + judulFilter + '</title>' +
+        '<style>' +
+            'body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1e293b;}' +
+            'h1{font-size:20px;font-weight:900;margin:0;color:#1e293b;}' +
+            'h2{font-size:13px;font-weight:600;color:#6366f1;margin:4px 0 0;}' +
+            'h3{font-size:12px;font-weight:800;color:#1e293b;margin:20px 0 8px;text-transform:uppercase;letter-spacing:0.5px;}' +
+            '.header{border-bottom:3px solid #6366f1;padding-bottom:12px;margin-bottom:16px;}' +
+            '.stats{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;}' +
+            '.stat{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;text-align:center;min-width:80px;}' +
+            '.stat-num{font-size:22px;font-weight:900;color:#6366f1;}' +
+            '.stat-lbl{font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;}' +
+            'table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:24px;}' +
+            'thead tr{background:#1e293b;color:white;}' +
+            'thead th{padding:9px 10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;}' +
+            'thead th.num{text-align:center;}' +
+            'tbody tr{page-break-inside:avoid;}' +
+            '.footer{margin-top:16px;font-size:10px;color:#94a3b8;text-align:right;}' +
+            '@media print{body{padding:10px;}button{display:none!important;}.no-break{page-break-inside:avoid;}}' +
+        '</style></head><body>' +
+        '<div class="header">' +
+            '<h1>📋 Laporan Absensi Pegawai</h1>' +
+            '<h2>Presensi Solider &nbsp;|&nbsp; ' + judulFilter + '</h2>' +
+        '</div>' +
+        '<div class="stats">' +
+            '<div class="stat"><div class="stat-num">' + Object.keys(rekapMap).length + '</div><div class="stat-lbl">Pegawai</div></div>' +
+            '<div class="stat"><div class="stat-num" style="color:#10b981;">' + totalHadir + '</div><div class="stat-lbl">Total Hadir</div></div>' +
+            '<div class="stat"><div class="stat-num" style="color:#f59e0b;">' + totalIzinDisetujui + '</div><div class="stat-lbl">Total Izin</div></div>' +
+            '<div class="stat"><div class="stat-num" style="color:#64748b;">' + dataCetak.length + '</div><div class="stat-lbl">Total Entri</div></div>' +
+        '</div>' +
+        '<h3>📊 Rekap Per Pegawai</h3>' +
+        (rekapRows ? (
+            '<table>' +
+                '<thead><tr>' +
+                    '<th>Nama Pegawai</th>' +
+                    '<th class="num">Hadir</th>' +
+                    '<th class="num">Sakit</th>' +
+                    '<th class="num">Cuti</th>' +
+                    '<th class="num">Izin Lain</th>' +
+                    '<th class="num">Total Hari</th>' +
+                '</tr></thead>' +
+                '<tbody>' + rekapRows + '</tbody>' +
+            '</table>'
+        ) : '<p style="font-size:11px;color:#94a3b8;">Tidak ada data.</p>') +
+        '<h3>🗒️ Detail Harian</h3>' +
+        '<table>' +
+            '<thead><tr><th>#</th><th>Nama</th><th>Tanggal</th><th>Jam Masuk</th><th>Jam Keluar</th><th>Status</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+        '</table>' +
+        '<div class="footer">Dicetak pada ' + printed + ' &nbsp;|&nbsp; Presensi Solider</div>' +
+        '<br><button onclick="window.print()" style="background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">🖨️ Cetak / Save PDF</button>' +
+        '</body></html>';
+
+    var win = window.open('', '_blank');
+    if (!win) {
+        showToast('Popup diblokir! Izinkan popup di browser.');
+        return;
+    }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+}
 
         /* =============================================================
            LOGIN & LOGOUT
@@ -650,7 +719,14 @@
                     initUserMap(office.lat, office.lng, office.rad);
 
                     const historyDiv = document.getElementById('userHistory');
-
+                    // Hanya kumpulkan tanggal izin yang DISETUJUI untuk menyembunyikan absen di hari itu
+                    const attItems = (res.history || []).map(h => ({
+                        type:   'absen',
+                        tgl:    h[2] || '',
+                        jamIn:  h[3] || '',
+                        jamOut: h[4] || '',
+                        status: h[9] || 'Hadir'
+                    }));
                     const izinItems = (res.userPermits || []).map(p => ({
                         type:       'izin',
                         tgl:        p[3] || '',
@@ -658,29 +734,6 @@
                         alasan:     p[5] || '',
                         statusIzin: p[7] || 'Menunggu'
                     }));
-
-                    // FIX: implementasi sesuai niat komentar lama — kumpulkan
-                    // tanggal yang izinnya sudah DISETUJUI, supaya entri absen
-                    // di tanggal yang sama disembunyikan dari riwayat. Sebelumnya
-                    // komentar ini ada tapi tidak pernah benar-benar dijalankan,
-                    // jadi kartu "Hadir/Tidak Hadir" dan kartu "Izin Disetujui"
-                    // bisa muncul berdampingan di tanggal yang sama (membingungkan).
-                    // Izin yang masih Menunggu/Ditolak TIDAK menyembunyikan absen,
-                    // karena belum ada penggantian status resmi untuk hari itu.
-                    const tglIzinDisetujui = new Set(
-                        izinItems.filter(p => p.statusIzin === 'Disetujui').map(p => p.tgl)
-                    );
-
-                    const attItems = (res.history || [])
-                        .filter(h => !tglIzinDisetujui.has(h[2] || ''))
-                        .map(h => ({
-                            type:   'absen',
-                            tgl:    h[2] || '',
-                            jamIn:  h[3] || '',
-                            jamOut: h[4] || '',
-                            status: h[9] || 'Hadir'
-                        }));
-
                     const combined = [...attItems, ...izinItems]
                         .sort((a, b) => (b.tgl > a.tgl ? 1 : b.tgl < a.tgl ? -1 : 0));
 
