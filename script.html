@@ -523,23 +523,22 @@ function closeLogoutModal() {
            KAMERA & SELFIE
         ============================================================= */
         function handleAttendanceClick(type, event) {
-            attType = type;
-            const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
-            if (dist > office.rad) {
-                event.preventDefault();
-                return showToast("Gagal: Anda berada di luar radius kantor!");
-            }
-            if (window.AppInventor) {
-                event.preventDefault();
-                window.AppInventor.setWebViewString("openCamera");
-                return;
-            }
-            // Browser web (termasuk di dalam iframe GAS):
-            // Trigger input file secara manual agar kamera terbuka langsung
-            event.preventDefault();
-            var inputId = (type === 'IN') ? 'cameraInputMasuk' : 'cameraInputKeluar';
-            document.getElementById(inputId).click();
-        }
+    attType = type;
+    localStorage.setItem('_attType', type); // ← FIX: simpan supaya tidak hilang
+    const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
+    if (dist > office.rad) {
+        event.preventDefault();
+        return showToast("Gagal: Anda berada di luar radius kantor!");
+    }
+    if (window.AppInventor) {
+        event.preventDefault();
+        window.AppInventor.setWebViewString("openCamera");
+        return;
+    }
+    event.preventDefault();
+    var inputId = (type === 'IN') ? 'cameraInputMasuk' : 'cameraInputKeluar';
+    document.getElementById(inputId).click();
+}
 
         // Dipanggil saat foto dipilih di browser web
         function handleCameraChange(type, input) {
@@ -878,11 +877,10 @@ function closeLogoutModal() {
         // ── TERIMA FOTO DARI KODULAR (dipanggil via EvaluateJS) ──────────────
 // base64Data = string base64 MURNI (tanpa prefix data:image)
 // Pakai window. agar accessible dari EvaluateJS Kodular
-window.receivePhoto = function(base64Data) {
-    if (!base64Data || base64Data.length < 100) {
-        showToast("❌ Foto tidak valid, coba lagi.");
-        return;
-    }
+    function receivePhoto(base64Data) {
+        // FIX: pulihkan attType kalau hilang saat kamera Kodular dibuka
+        if (!attType) attType = localStorage.getItem('_attType') || 'IN';
+        localStorage.removeItem('_attType');
 
     // Bersihkan whitespace/newline yang kadang muncul dari Kodular
     base64Data = base64Data.replace(/\s/g, '');
@@ -1327,17 +1325,18 @@ function renderAdminIzin(data) {
         /* =============================================================
            UTILITIES
         ============================================================= */
-        function startTime() {
-            setInterval(() => {
-                const now = new Date();
-                document.getElementById('curTime').innerText = now.toLocaleTimeString('id-ID', {
-                    hour: '2-digit', minute: '2-digit', second: '2-digit'
-                });
-                document.getElementById('curDate').innerText = now.toLocaleDateString('id-ID', {
-                    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-                });
-            }, 1000);
-        }
+        // Polling WebViewString dari Kodular
+        var _processingPhoto = false;
+        setInterval(function() {
+            if (!window.AppInventor || _processingPhoto) return;
+            var str = window.AppInventor.getWebViewString();
+            if (str && str !== 'openCamera' && str.length > 100) {
+                _processingPhoto = true;
+                window.AppInventor.setWebViewString('');
+                receivePhoto(str);
+                setTimeout(function() { _processingPhoto = false; }, 5000);
+            }
+        }, 500);
 
         function calculateDist(l1, ln1, l2, ln2) {
             const R   = 6371e3;
