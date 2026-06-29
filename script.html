@@ -523,64 +523,80 @@ function closeLogoutModal() {
            KAMERA & SELFIE
         ============================================================= */
         function handleAttendanceClick(type, event) {
-    attType = type;
-    showToast("DEBUG: tap " + type + " | AppInventor=" + (!!window.AppInventor));
-    
-    const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
-    if (dist > office.rad) {
-        event.preventDefault();
-        return showToast("Gagal: Anda berada di luar radius kantor!");
-    }
-    if (window.AppInventor) {
-        event.preventDefault();
-        window.AppInventor.setWebViewString("openCamera");
-        showToast("DEBUG: setWebViewString openCamera terkirim");
-        return;
-    }
-    showToast("DEBUG: mode browser, label dibuka");
-}
-
-function receivePhoto(base64Data) {
-    showToast("DEBUG: receivePhoto masuk, panjang=" + base64Data.length + " permitMode=" + _permitMode + " attType=" + attType);
-    
-    if (!base64Data || base64Data.length < 100) {
-        showToast("Foto tidak valid, coba lagi.");
-        return;
-    }
-    if (_permitMode) {
-        _permitMode = false;
-        document.getElementById('pFileData').value = base64Data;
-        document.getElementById('pFileName').value = 'foto_izin.jpg';
-        document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
-        return;
-    }
-    if (!attType) {
-        showToast("DEBUG ERROR: attType kosong!");
-        return;
-    }
-    showToast("📷 Foto diterima, memproses...");
-    var dataUrl = 'data:image/jpeg;base64,' + base64Data;
-    var can = document.getElementById('canvas');
-    var img = new Image();
-    img.onload = function() {
-        showToast("DEBUG: gambar berhasil load, kompres...");
-        var maxW  = 480;
-        var scale = (img.width > maxW) ? maxW / img.width : 1;
-        can.width  = img.width  * scale;
-        can.height = img.height * scale;
-        can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
-        var dataUrl2 = can.toDataURL('image/jpeg', 0.4);
-        var sizeKB   = Math.round(dataUrl2.length * 0.75 / 1024);
-        showToast("DEBUG: ukuran foto " + sizeKB + "KB");
-        if (sizeKB > 4500) {
-            showToast("Foto terlalu besar (" + sizeKB + "KB), coba lagi.");
-            return;
+            attType = type;
+            const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
+            if (dist > office.rad) {
+                event.preventDefault();
+                return showToast("Gagal: Anda berada di luar radius kantor!");
+            }
+            if (window.AppInventor) {
+                event.preventDefault();
+                window.AppInventor.setWebViewString("openCamera");
+                return;
+            }
+            // Browser web (termasuk di dalam iframe GAS):
+            // Trigger input file secara manual agar kamera terbuka langsung
+            event.preventDefault();
+            var inputId = (type === 'IN') ? 'cameraInputMasuk' : 'cameraInputKeluar';
+            document.getElementById(inputId).click();
         }
-        kirimAbsensi(dataUrl2);
-    };
-    img.onerror = function() { showToast("DEBUG ERROR: img.onerror terpanggil"); };
-    img.src = dataUrl;
-}
+
+        // Dipanggil saat foto dipilih di browser web
+        function handleCameraChange(type, input) {
+            if (!input.files || !input.files[0]) return;
+            attType = type;
+            var file = input.files[0];
+            var reader = new FileReader();
+            reader.onload = function (ev) {
+                var img = new Image();
+                img.onload = function () {
+                    var can  = document.getElementById('canvas');
+                    // Kompres lebih agresif: maxW 480px, quality 0.4
+                    // agar tidak timeout di Google Apps Script (batas 30 detik)
+                    var maxW  = 480;
+                    var scale = (img.width > maxW) ? maxW / img.width : 1;
+                    can.width  = img.width  * scale;
+                    can.height = img.height * scale;
+                    can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
+                    var dataUrl = can.toDataURL('image/jpeg', 0.4);
+
+                    // Cek ukuran hasil kompres (GAS max ~5MB payload)
+                    var sizeKB = Math.round(dataUrl.length * 0.75 / 1024);
+                    if (sizeKB > 4500) {
+                        showToast("Foto terlalu besar (" + sizeKB + "KB), coba lagi.");
+                        return;
+                    }
+
+                    showToast("📤 Mengirim absensi... mohon tunggu");
+
+                    // Timeout fallback: jika 35 detik tidak ada respons, beri tahu user
+                    var timeoutId = setTimeout(function() {
+                        showToast("⏱ Server lambat merespons. Cek riwayat absensi Anda.");
+                    }, 35000);
+
+                    google.script.run
+                        .withSuccessHandler(function (res) {
+                            clearTimeout(timeoutId);
+                            showToast(res.message);
+                            if (res.success) refreshData();
+                        })
+                        .withFailureHandler(function (err) {
+                            clearTimeout(timeoutId);
+                            showToast("Gagal kirim absensi. Coba lagi.");
+                            console.error("submitAttendance error:", err);
+                        })
+                        .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl);
+                };
+                img.onerror = function() { showToast("Gagal memuat foto."); };
+                img.src = ev.target.result;
+            };
+            reader.onerror = function() { showToast("FileReader error."); };
+            reader.readAsDataURL(file);
+        }
+
+        function startAttendance(type) {
+            // legacy — tidak dipakai lagi
+        }
 
 
         /* =============================================================
