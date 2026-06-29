@@ -1358,26 +1358,27 @@ setInterval(function() {
             setTimeout(() => t.style.bottom = '-100px', 3000);
         }
 
-        // Metode 1: dipanggil dari EvaluateJS Kodular via variabel global
-        // Blok Kodular: EvaluateJS "window._kodularPhoto='"+base64Data+"';receiveKodularPhoto();"
-        function receiveKodularPhoto() {
-            var data = window._kodularPhoto || '';
-            window._kodularPhoto = '';
-            if (!data || data.length < 100) {
-                showToast('Foto tidak valid, coba lagi.');
-                return;
-            }
-            receivePhoto(data);
-        }
 
         function receiveKodularPhoto() {
-    var base64Data = window.kodularPhoto || '';
-    if (!base64Data) {
-        showToast("Gagal menerima foto dari kamera.");
-        return;
+        var base64Data = window.kodularPhoto || window._kodularPhoto || '';
+        window.kodularPhoto = '';
+        window._kodularPhoto = '';
+        if (!base64Data || base64Data.length < 100) {
+            showToast("Gagal menerima foto dari kamera.");
+            return;
+        }
+        receivePhoto(base64Data);
     }
-    window.kodularPhoto = '';
-    receivePhoto(base64Data);
+        function startTime() {
+    setInterval(() => {
+        const now = new Date();
+        document.getElementById('curTime').innerText = now.toLocaleTimeString('id-ID', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+        document.getElementById('curDate').innerText = now.toLocaleDateString('id-ID', {
+            weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+        });
+    }, 1000);
 }
 
 
