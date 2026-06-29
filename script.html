@@ -1,0 +1,1379 @@
+<script>
+        /* =============================================================
+           NOTE: Escape iframe dihapus — diblokir browser modern (cross-origin).
+           input[type=file] di iframe GAS sudah bisa jalan langsung di Chrome/Android.
+        ============================================================= */
+
+        /* =============================================================
+           VARIABEL GLOBAL
+        ============================================================= */
+        let user = null;
+        let office = { lat: 3.509973, lng: 98.895861, rad: 100 };
+        let currentLoc = { lat: 0, lng: 0 };
+        let attType = '';
+
+        let adminMap, adminMarker, adminCircle;
+        let userMap, userPosMarker, userOfficeCircle, userOfficeMarker;
+
+        /* =============================================================
+           INIT
+        ============================================================= */
+        window.onload = () => {
+            startTime();
+            initGPS();
+
+            const cachedOffice = localStorage.getItem('presensi_office_v3');
+            if (cachedOffice) {
+                try {
+                    const parsed = JSON.parse(cachedOffice);
+                    const validLat = parsed.lat && Math.abs(parsed.lat) <= 90;
+                    const validLng = parsed.lng && Math.abs(parsed.lng) <= 180;
+                    if (validLat && validLng) {
+                        office = parsed;
+                    } else {
+                        console.warn('Cache office lama tidak valid, dibuang:', parsed);
+                        localStorage.removeItem('presensi_office_v3');
+                    }
+                } catch (e) {
+                    localStorage.removeItem('presensi_office_v3');
+                }
+            }
+
+            const saved = localStorage.getItem('presensi_user_v3');
+            if (saved) {
+                try {
+                    user = JSON.parse(saved);
+                    setupApp();
+                } catch (e) {
+                    localStorage.removeItem('presensi_user_v3');
+                }
+            }
+        };
+
+        /* =============================================================
+           SETUP APP SETELAH LOGIN
+        ============================================================= */
+        function setupApp() {
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    document.getElementById('userName').innerText = esc(user.nama);
+
+    if (user.role === 'admin') {
+        document.getElementById('nav-setting').classList.remove('hidden');
+        document.getElementById('nav-pegawai').classList.remove('hidden');
+        document.getElementById('nav-log').classList.remove('hidden');
+        document.getElementById('nav-izin').classList.remove('hidden'); // hanya admin
+    }
+    // Pegawai: tidak ada tab tambahan, hanya HOME dan KELUAR
+
+    setTimeout(() => {
+        refreshData();
+        window.dispatchEvent(new Event('resize'));
+    }, 800);
+
+    try {
+        google.script.run
+            .withSuccessHandler(loc => {
+                if (loc && loc.lat && loc.lng && !loc.error &&
+                    Math.abs(loc.lat) <= 90 && Math.abs(loc.lng) <= 180) {
+                    office = { lat: loc.lat, lng: loc.lng, rad: loc.rad || 100 };
+                    localStorage.setItem('presensi_office_v3', JSON.stringify(office));
+                    initUserMap(office.lat, office.lng, office.rad);
+                    updateGPSUI();
+                }
+            })
+            .withFailureHandler(err => console.warn('getOfficeLocation gagal:', err))
+            .getOfficeLocation();
+    } catch (e) {
+        console.warn('getOfficeLocation tidak tersedia:', e);
+    }
+}
+
+        /* =============================================================
+           NAVIGASI TAB
+        ============================================================= */
+        function switchTab(id) {
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById('tab-' + id).classList.add('active');
+
+            document.querySelectorAll('nav button').forEach(b => {
+                b.classList.replace('text-indigo-600', 'text-gray-400');
+            });
+            const navBtn = document.getElementById('nav-' + id);
+            if (navBtn) navBtn.classList.replace('text-gray-400', 'text-indigo-600');
+
+            setTimeout(() => {
+                window.dispatchEvent(new Event('resize'));
+                if (id === 'setting') {
+                    initAdminMap(office.lat, office.lng, office.rad);
+                } else if (id === 'home') {
+                    if (userMap) {
+                        userMap.invalidateSize && userMap.invalidateSize();
+                        centerMapOnUser();
+                    } else {
+                        initUserMap(office.lat, office.lng, office.rad);
+                    }
+                } else if (id === 'pegawai') {
+                    loadPegawaiData();
+                } else if (id === 'log') {
+                    loadAttendanceLog();
+                } else if (id === 'izin') {
+                    loadAdminIzin();
+                }
+            }, 500);
+        }
+
+        /* =============================================================
+           SANITASI XSS
+        ============================================================= */
+        function esc(str) {
+            if (str === null || str === undefined) return '';
+            const d = document.createElement('div');
+            d.appendChild(document.createTextNode(String(str)));
+            return d.innerHTML;
+        }
+
+        /* =============================================================
+           LOAD DATA PEGAWAI
+        ============================================================= */
+        function loadPegawaiData() {
+            try {
+                google.script.run
+                    .withSuccessHandler(function (data) {
+                        if (!data || !data.length) {
+                            document.getElementById('adminUserTable').innerHTML =
+                                '<tr><td colspan="6" class="py-8 text-center text-gray-400 text-xs">Belum ada data pegawai</td></tr>';
+                            document.getElementById('pegawaiCount').innerText = '0';
+                            return;
+                        }
+                        document.getElementById('pegawaiCount').innerText = data.length;
+                        document.getElementById('adminUserTable').innerHTML = data.map(function (u, i) {
+                            var roleBadge = u[4] === 'admin'
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-indigo-50 text-indigo-600';
+                            return '<tr class="' + (i % 2 === 0 ? 'bg-white' : 'bg-gray-50') + ' border-b border-gray-100">' +
+                                '<td class="py-3 px-3 font-bold text-gray-400">' + (i + 1) + '</td>' +
+                                '<td class="py-3 px-3 font-bold text-gray-900">' + esc(u[1]) + '</td>' +
+                                '<td class="py-3 px-3 text-gray-600">' + esc(u[2] || '-') + '</td>' +
+                                '<td class="py-3 px-3 text-gray-600">' + esc(u[3]) + '</td>' +
+                                '<td class="py-3 px-3 text-center"><span class="px-2 py-1 rounded-lg text-[9px] font-black uppercase ' + roleBadge + '">' + esc(u[4]) + '</span></td>' +
+                                '<td class="py-3 px-3 text-center"><div class="flex gap-1 justify-center">' +
+                                '<button onclick="loadAndEditUser(\'' + esc(u[0]) + '\')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center"><i class="fas fa-edit text-[10px]"></i></button>' +
+                                '<button onclick="deleteUserUI(\'' + esc(u[0]) + '\')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center"><i class="fas fa-trash text-[10px]"></i></button>' +
+                                '</div></td></tr>';
+                        }).join('');
+                    })
+                    .withFailureHandler(function () {
+                        document.getElementById('adminUserTable').innerHTML =
+                            '<tr><td colspan="6" class="py-8 text-center text-red-400 text-xs">Gagal memuat data</td></tr>';
+                    })
+                    .getUsers();
+            } catch (e) {
+                console.warn('getUsers error:', e);
+            }
+        }
+
+        var _usersCache = [];
+
+        function loadAndEditUser(id) {
+            if (_usersCache.length) {
+                var u = _usersCache.find(function (x) { return x[0] == id; });
+                if (u) { openUserModal(u[0], u[1], u[2], u[3], u[4]); return; }
+            }
+            google.script.run
+                .withSuccessHandler(function (data) {
+                    _usersCache = data || [];
+                    var u = _usersCache.find(function (x) { return x[0] == id; });
+                    if (u) openUserModal(u[0], u[1], u[2], u[3], u[4]);
+                })
+                .withFailureHandler(function () { showToast('Gagal memuat data pegawai'); })
+                .getUsers();
+        }
+
+        /* =============================================================
+           LOG ABSENSI
+        ============================================================= */
+        var allLogData = [];
+
+        function loadAttendanceLog() {
+            try {
+                document.getElementById('adminAbsenceLog').innerHTML =
+                    '<tr><td colspan="6" class="py-8 text-center text-gray-400 text-xs"><i class="fas fa-spinner fa-spin mr-2"></i> Memuat data...</td></tr>';
+                google.script.run
+                    .withSuccessHandler(function (data) {
+                        allLogData = data || [];
+                        renderLogTable(allLogData);
+                    })
+                    .withFailureHandler(function () {
+                        document.getElementById('adminAbsenceLog').innerHTML =
+                            '<tr><td colspan="6" class="py-8 text-center text-red-400 text-xs">Gagal memuat log absensi</td></tr>';
+                    })
+                    .getAttendanceLog();
+            } catch (e) {
+                console.warn('getAttendanceLog error:', e);
+            }
+        }
+
+        function renderLogTable(data) {
+            document.getElementById('logCount').innerText = 'Total: ' + data.length + ' data';
+            if (!data.length) {
+                document.getElementById('adminAbsenceLog').innerHTML =
+                    '<tr><td colspan="6" class="py-8 text-center text-gray-400 text-xs">Belum ada riwayat absensi</td></tr>';
+                return;
+            }
+
+            document.getElementById('adminAbsenceLog').innerHTML = data.map(function (a, i) {
+                var nama    = esc(a[13] || 'Anonim');
+                var mapsUrl = a[12] || '#';
+                var status  = a[9]  || 'Hadir';
+
+                var statusBadge = status === 'Hadir'
+                    ? '<span class="px-2 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[9px] font-black uppercase">' + esc(status) + '</span>'
+                    : '<span class="px-2 py-1 bg-amber-50 text-amber-600 rounded-lg text-[9px] font-black uppercase">' + esc(status) + '</span>';
+
+                return '<tr class="' + (i % 2 === 0 ? 'bg-white' : 'bg-gray-50') + ' border-b border-gray-100 hover:bg-indigo-50 transition-colors">' +
+                    '<td class="py-3 px-3 font-bold text-gray-900 whitespace-nowrap">' + nama + '</td>' +
+                    '<td class="py-3 px-3 font-bold text-gray-600">' + esc(a[2]) + '</td>' +
+                    '<td class="py-3 px-3 font-bold text-indigo-600">' + esc(a[3]) + '</td>' +
+                    '<td class="py-3 px-3 font-bold text-red-500">' + esc(a[4] || '--:--') + '</td>' +
+                    '<td class="py-3 px-3 text-center">' + statusBadge + '</td>' +
+                    '<td class="py-3 px-3 text-center">' +
+                    '<a href="' + mapsUrl + '" target="_blank" class="inline-flex items-center justify-center w-8 h-8 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors"><i class="fas fa-map-location-dot text-[10px]"></i></a>' +
+                    '</td></tr>';
+            }).join('');
+        }
+
+        function applyLogFilter() {
+            var filterBulan   = document.getElementById('filterBulan').value;
+            var filterTanggal = document.getElementById('filterTanggal').value;
+            var filtered = allLogData.filter(function (a) {
+                var tgl = a[2];
+                if (!tgl) return false;
+                if (filterTanggal) return tgl === filterTanggal;
+                if (filterBulan)   return tgl.startsWith(filterBulan);
+                return true;
+            });
+            renderLogTable(filtered);
+        }
+
+        function resetLogFilter() {
+            document.getElementById('filterBulan').value   = '';
+            document.getElementById('filterTanggal').value = '';
+            renderLogTable(allLogData);
+        }
+
+        /* =============================================================
+           EXPORT PDF
+        ============================================================= */
+        /* =============================================================
+   EXPORT PDF — rekap per pegawai + detail harian
+   FIX: auto-fetch allIzinData kalau cache kosong
+============================================================= */
+function exportPDF() {
+    var filterBulan   = document.getElementById('filterBulan').value;
+    var filterTanggal = document.getElementById('filterTanggal').value;
+
+    // Tentukan data absensi yang akan dicetak
+    var dataCetak = allLogData;
+    var judulFilter = 'Semua Data';
+    if (filterBulan) {
+        dataCetak = allLogData.filter(function(a) { return a[2] && a[2].startsWith(filterBulan); });
+        var parts = filterBulan.split('-');
+        var bulanNames = ['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+        judulFilter = 'Bulan ' + bulanNames[parseInt(parts[1])] + ' ' + parts[0];
+    } else if (filterTanggal) {
+        dataCetak = allLogData.filter(function(a) { return a[2] === filterTanggal; });
+        judulFilter = 'Tanggal ' + filterTanggal;
+    }
+
+    if (!dataCetak.length) {
+        showToast('Tidak ada data untuk di-export!');
+        return;
+    }
+
+    // Kalau cache izin kosong, fetch dulu dari server sebelum generate PDF
+    if (!allIzinData || !allIzinData.length) {
+        showToast('⏳ Memuat data izin, harap tunggu...');
+        google.script.run
+            .withSuccessHandler(function(res) {
+                if (res && res.allPermits) allIzinData = res.allPermits;
+                _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
+            })
+            .withFailureHandler(function() {
+                // Tetap generate PDF meski izin gagal diambil — rekap izin akan 0
+                _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
+            })
+            .getDashboardData(user.id, user.role);
+    } else {
+        _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal);
+    }
+}
+
+function _doGeneratePDF(dataCetak, judulFilter, filterBulan, filterTanggal) {
+    // Filter data izin sesuai periode yang dipilih
+    var izinCetak = (allIzinData || []).filter(function(p) {
+        var tgl = p[3] || '';
+        if (!tgl) return false;
+        if (filterTanggal) return tgl === filterTanggal;
+        if (filterBulan)   return tgl.startsWith(filterBulan);
+        return true;
+    });
+
+    // === REKAP PER PEGAWAI ===
+    var rekapMap = {};
+
+    // Isi dari data absensi
+    dataCetak.forEach(function(a) {
+        var nama   = a[13] || 'Anonim';
+        var status = a[9]  || 'Hadir';
+        if (!rekapMap[nama]) rekapMap[nama] = { hadir: 0, sakit: 0, cuti: 0, izinLain: 0 };
+        if (status === 'Hadir') rekapMap[nama].hadir++;
+    });
+
+    // Isi dari data izin (hanya yang Disetujui)
+    izinCetak.forEach(function(p) {
+        var nama   = p[2] || 'Anonim';
+        var jenis  = p[4] || '';
+        var status = p[7] || '';
+        if (status !== 'Disetujui') return;
+        if (!rekapMap[nama]) rekapMap[nama] = { hadir: 0, sakit: 0, cuti: 0, izinLain: 0 };
+        if (jenis === 'Sakit')       rekapMap[nama].sakit++;
+        else if (jenis === 'Cuti')   rekapMap[nama].cuti++;
+        else                         rekapMap[nama].izinLain++;
+    });
+
+    // Baris tabel rekap
+    var rekapRows = Object.keys(rekapMap).sort().map(function(nama, i) {
+        var r = rekapMap[nama];
+        var totalTdk = r.sakit + r.cuti + r.izinLain;
+        return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';page-break-inside:avoid;">' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(nama) + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#10b981;font-weight:800;">' + r.hadir + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#ef4444;font-weight:700;">' + r.sakit + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#0ea5e9;font-weight:700;">' + r.cuti + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#f59e0b;font-weight:700;">' + r.izinLain + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;text-align:center;color:#6366f1;font-weight:800;">' + (r.hadir + totalTdk) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    // === STATISTIK RINGKASAN ===
+    var totalHadir = dataCetak.filter(function(a) { return (a[9] || 'Hadir') === 'Hadir'; }).length;
+    var totalIzinDisetujui = izinCetak.filter(function(p) { return p[7] === 'Disetujui'; }).length;
+    var printed = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+
+    // === BARIS TABEL DETAIL HARIAN ===
+    var rows = dataCetak.map(function(a, i) {
+        var status = a[9] || 'Hadir';
+        var statusColor = status === 'Hadir' ? '#10b981' : '#f59e0b';
+        return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';page-break-inside:avoid;">' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;">' + (i+1) + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(a[13] || '-') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;">' + esc(a[2] || '-') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;color:#6366f1;font-weight:700;">' + esc(a[3] || '-') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;color:#ef4444;font-weight:700;">' + esc(a[4] || '--:--') + '</td>' +
+            '<td style="padding:7px 10px;border-bottom:1px solid #e2e8f0;"><span style="background:' + statusColor + '22;color:' + statusColor + ';padding:2px 8px;border-radius:6px;font-size:10px;font-weight:800;">' + esc(status) + '</span></td>' +
+        '</tr>';
+    }).join('');
+
+    // === BANGUN HTML PDF ===
+    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+        '<title>Laporan Absensi - ' + judulFilter + '</title>' +
+        '<style>' +
+            'body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1e293b;}' +
+            'h1{font-size:20px;font-weight:900;margin:0;color:#1e293b;}' +
+            'h2{font-size:13px;font-weight:600;color:#6366f1;margin:4px 0 0;}' +
+            'h3{font-size:12px;font-weight:800;color:#1e293b;margin:20px 0 8px;text-transform:uppercase;letter-spacing:0.5px;}' +
+            '.header{border-bottom:3px solid #6366f1;padding-bottom:12px;margin-bottom:16px;}' +
+            '.stats{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;}' +
+            '.stat{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;text-align:center;min-width:80px;}' +
+            '.stat-num{font-size:22px;font-weight:900;color:#6366f1;}' +
+            '.stat-lbl{font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;}' +
+            'table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:24px;}' +
+            'thead tr{background:#1e293b;color:white;}' +
+            'thead th{padding:9px 10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;}' +
+            'thead th.num{text-align:center;}' +
+            'tbody tr{page-break-inside:avoid;}' +
+            '.footer{margin-top:16px;font-size:10px;color:#94a3b8;text-align:right;}' +
+            '@media print{body{padding:10px;}button{display:none!important;}.no-break{page-break-inside:avoid;}}' +
+        '</style></head><body>' +
+        '<div class="header">' +
+            '<h1>📋 Laporan Absensi Pegawai</h1>' +
+            '<h2>Presensi Solider &nbsp;|&nbsp; ' + judulFilter + '</h2>' +
+        '</div>' +
+        '<div class="stats">' +
+            '<div class="stat"><div class="stat-num">' + Object.keys(rekapMap).length + '</div><div class="stat-lbl">Pegawai</div></div>' +
+            '<div class="stat"><div class="stat-num" style="color:#10b981;">' + totalHadir + '</div><div class="stat-lbl">Total Hadir</div></div>' +
+            '<div class="stat"><div class="stat-num" style="color:#f59e0b;">' + totalIzinDisetujui + '</div><div class="stat-lbl">Total Izin</div></div>' +
+            '<div class="stat"><div class="stat-num" style="color:#64748b;">' + dataCetak.length + '</div><div class="stat-lbl">Total Entri</div></div>' +
+        '</div>' +
+        '<h3>📊 Rekap Per Pegawai</h3>' +
+        (rekapRows ? (
+            '<table>' +
+                '<thead><tr>' +
+                    '<th>Nama Pegawai</th>' +
+                    '<th class="num">Hadir</th>' +
+                    '<th class="num">Sakit</th>' +
+                    '<th class="num">Cuti</th>' +
+                    '<th class="num">Izin Lain</th>' +
+                    '<th class="num">Total Hari</th>' +
+                '</tr></thead>' +
+                '<tbody>' + rekapRows + '</tbody>' +
+            '</table>'
+        ) : '<p style="font-size:11px;color:#94a3b8;">Tidak ada data.</p>') +
+        '<h3>🗒️ Detail Harian</h3>' +
+        '<table>' +
+            '<thead><tr><th>#</th><th>Nama</th><th>Tanggal</th><th>Jam Masuk</th><th>Jam Keluar</th><th>Status</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+        '</table>' +
+        '<div class="footer">Dicetak pada ' + printed + ' &nbsp;|&nbsp; Presensi Solider</div>' +
+        '<br><button onclick="window.print()" style="background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">🖨️ Cetak / Save PDF</button>' +
+        '</body></html>';
+
+    var win = window.open('', '_blank');
+    if (!win) {
+        showToast('Popup diblokir! Izinkan popup di browser.');
+        return;
+    }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+}
+
+        /* =============================================================
+           LOGIN & LOGOUT
+        ============================================================= */
+        function handleLogin() {
+            const phone = document.getElementById('loginPhone').value.trim();
+            const pass  = document.getElementById('loginPass').value;
+            const btn   = document.getElementById('btnLogin');
+
+            if (!phone || !pass) return showToast("Harap isi semua bidang!");
+
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
+            btn.disabled  = true;
+
+            google.script.run
+                .withSuccessHandler(res => {
+                    if (res && res.success) {
+                        user = res.user;
+                        localStorage.setItem('presensi_user_v3', JSON.stringify(user));
+                        setupApp();
+                    } else {
+                        showToast(res ? res.message : "Terjadi kesalahan server");
+                        btn.innerHTML = 'MASUK SEKARANG';
+                        btn.disabled  = false;
+                    }
+                })
+                .withFailureHandler(err => {
+                    showToast("Gagal terhubung ke server");
+                    btn.innerHTML = 'MASUK SEKARANG';
+                    btn.disabled  = false;
+                })
+                .checkLogin(phone, pass);
+        }
+
+        window.addEventListener('load', () => {
+            const passField = document.getElementById('loginPass');
+            if (passField) passField.addEventListener('keydown', e => {
+                if (e.key === 'Enter') handleLogin();
+            });
+        });
+
+        // ─── FIX LOGOUT ───────────────────────────────────────────────
+        // confirm() diblokir WebViewer Android — pakai showToast konfirmasi
+        // custom agar tombol logout bisa bekerja di dalam MIT App Inventor / Kodular.
+        // ──────────────────────────────────────────────────────────────
+        function handleLogout() {
+    document.getElementById('logoutModal').classList.replace('hidden', 'flex');
+}
+
+function closeLogoutModal() {
+    document.getElementById('logoutModal').classList.replace('flex', 'hidden');
+}
+
+        function doLogout() {
+    closeLogoutModal();
+    localStorage.removeItem('presensi_user_v3');
+    user = null;
+
+    // reset map
+    userMap = null; adminMap = null;
+    userPosMarker = null; userOfficeCircle = null;
+    userOfficeMarker = null; adminMarker = null;
+    adminCircle = null; hasInitialGPSFix = false;
+    const mc = document.getElementById('user-map');
+    if (mc) mc.innerHTML = '';
+
+    document.getElementById('loginPhone').value   = '';
+    document.getElementById('loginPass').value    = '';
+    document.getElementById('btnLogin').innerHTML = 'MASUK SEKARANG';
+    document.getElementById('btnLogin').disabled  = false;
+
+    // Sembunyikan semua tab termasuk izin
+    ['nav-setting', 'nav-pegawai', 'nav-log', 'nav-izin'].forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+    });
+
+    switchTab('home');
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('loginScreen').classList.remove('hidden');
+}
+
+        /* =============================================================
+           KAMERA & SELFIE
+        ============================================================= */
+        function handleAttendanceClick(type, event) {
+    attType = type;
+    localStorage.setItem('_attType', type);
+    const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
+    if (dist > office.rad) {
+        event.preventDefault();
+        return showToast("Gagal: Anda berada di luar radius kantor!");
+    }
+    if (window.AppInventor) {
+        event.preventDefault();
+        window.AppInventor.setWebViewString("openCamera");
+        return;
+    }
+    event.preventDefault();
+    var inputId = (type === 'IN') ? 'cameraInputMasuk' : 'cameraInputKeluar';
+    document.getElementById(inputId).click();
+}
+
+        // Dipanggil saat foto dipilih di browser web
+        function handleCameraChange(type, input) {
+            if (!input.files || !input.files[0]) return;
+            attType = type;
+            var file = input.files[0];
+            var reader = new FileReader();
+            reader.onload = function (ev) {
+                var img = new Image();
+                img.onload = function () {
+                    var can  = document.getElementById('canvas');
+                    // Kompres lebih agresif: maxW 480px, quality 0.4
+                    // agar tidak timeout di Google Apps Script (batas 30 detik)
+                    var maxW  = 480;
+                    var scale = (img.width > maxW) ? maxW / img.width : 1;
+                    can.width  = img.width  * scale;
+                    can.height = img.height * scale;
+                    can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
+                    var dataUrl = can.toDataURL('image/jpeg', 0.4);
+
+                    // Cek ukuran hasil kompres (GAS max ~5MB payload)
+                    var sizeKB = Math.round(dataUrl.length * 0.75 / 1024);
+                    if (sizeKB > 4500) {
+                        showToast("Foto terlalu besar (" + sizeKB + "KB), coba lagi.");
+                        return;
+                    }
+
+                    showToast("📤 Mengirim absensi... mohon tunggu");
+
+                    // Timeout fallback: jika 35 detik tidak ada respons, beri tahu user
+                    var timeoutId = setTimeout(function() {
+                        showToast("⏱ Server lambat merespons. Cek riwayat absensi Anda.");
+                    }, 35000);
+
+                    google.script.run
+                        .withSuccessHandler(function (res) {
+                            clearTimeout(timeoutId);
+                            showToast(res.message);
+                            if (res.success) refreshData();
+                        })
+                        .withFailureHandler(function (err) {
+                            clearTimeout(timeoutId);
+                            showToast("Gagal kirim absensi. Coba lagi.");
+                            console.error("submitAttendance error:", err);
+                        })
+                        .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl);
+                };
+                img.onerror = function() { showToast("Gagal memuat foto."); };
+                img.src = ev.target.result;
+            };
+            reader.onerror = function() { showToast("FileReader error."); };
+            reader.readAsDataURL(file);
+        }
+
+        function startAttendance(type) {
+            // legacy — tidak dipakai lagi
+        }
+
+
+        /* =============================================================
+           FETCH DATA DASHBOARD
+        ============================================================= */
+        function refreshData() {
+            if (!user) return;
+            document.getElementById('refreshIcon')?.classList.add('spinning');
+            google.script.run
+                .withSuccessHandler(res => {
+                    document.getElementById('refreshIcon')?.classList.remove('spinning');
+
+                    if (!res || res.error) {
+                        console.warn('refreshData error:', res && res.error);
+                        if (res && res.error) showToast('Server error: ' + res.error);
+                        initUserMap(office.lat, office.lng, office.rad);
+                        updateGPSUI();
+                        return;
+                    }
+
+                    // FIX: Jika sesi tidak valid (user dihapus admin), logout otomatis
+                    if (res.invalidSession) {
+                        showToast('Sesi tidak valid, silakan login ulang.');
+                        doLogout();
+                        return;
+                    }
+
+                    if (res.settings) {
+                        const s      = res.settings;
+                        const rawLat = s.office_lat || s.officelat || s.lat;
+                        const rawLng = s.office_lng || s.officelng || s.lng;
+                        const rawRad = s.radius     || s.rad;
+                        const parsedLat = parseFloat(rawLat);
+                        const parsedLng = parseFloat(rawLng);
+                        if (rawLat && rawLng && Math.abs(parsedLat) <= 90 && Math.abs(parsedLng) <= 180) {
+                            office = { lat: parsedLat, lng: parsedLng, rad: parseInt(rawRad) || 100 };
+                            localStorage.setItem('presensi_office_v3', JSON.stringify(office));
+                        } else if (rawLat && rawLng) {
+                            console.warn('Settings office_lat/lng tidak valid, diabaikan:', rawLat, rawLng);
+                        }
+                    }
+
+                    initUserMap(office.lat, office.lng, office.rad);
+
+                    const historyDiv = document.getElementById('userHistory');
+                    const attItems = (res.history || []).map(h => ({
+                        type:   'absen',
+                        tgl:    h[2] || '',
+                        jamIn:  h[3] || '',
+                        jamOut: h[4] || '',
+                        status: h[9] || 'Hadir'
+                    }));
+                    const izinItems = (res.userPermits || []).map(p => ({
+                        type:       'izin',
+                        tgl:        p[3] || '',
+                        jenisIzin:  p[4] || 'Izin',
+                        alasan:     p[5] || '',
+                        statusIzin: p[7] || 'Menunggu'
+                    }));
+                    const combined = [...attItems, ...izinItems]
+                        .sort((a, b) => (b.tgl > a.tgl ? 1 : b.tgl < a.tgl ? -1 : 0));
+
+                    if (combined.length > 0) {
+                        historyDiv.innerHTML = combined.map(item => {
+                            if (item.type === 'absen') {
+                                return `
+                                <div class="bg-white p-4 rounded-2xl border border-gray-100 flex justify-between items-center shadow-sm">
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 flex-shrink-0">
+                                            <i class="fas fa-fingerprint text-sm"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-[10px] font-black text-indigo-600">${esc(item.tgl)}</p>
+                                            <h4 class="font-bold text-gray-900 text-xs">${esc(item.jamIn)} – ${esc(item.jamOut || '--:--')}</h4>
+                                        </div>
+                                    </div>
+                                    <span class="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[9px] font-bold">${esc(item.status)}</span>
+                                </div>`;
+                            } else {
+                                const sc = item.statusIzin === 'Disetujui'
+                                    ? 'bg-emerald-50 text-emerald-600'
+                                    : item.statusIzin === 'Ditolak'
+                                        ? 'bg-red-50 text-red-500'
+                                        : 'bg-amber-50 text-amber-600';
+                                return `
+                                <div class="bg-white p-4 rounded-2xl border border-gray-100 flex justify-between items-center shadow-sm">
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500 flex-shrink-0">
+                                            <i class="fas fa-file-medical text-sm"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-[10px] font-black text-amber-500">${esc(item.tgl)} • ${esc(item.jenisIzin)}</p>
+                                            <h4 class="font-bold text-gray-900 text-xs truncate max-w-[160px]">${esc(item.alasan)}</h4>
+                                        </div>
+                                    </div>
+                                    <span class="px-3 py-1 rounded-lg text-[9px] font-bold ${sc}">${esc(item.statusIzin)}</span>
+                                </div>`;
+                            }
+                        }).join('');
+                    } else {
+                        historyDiv.innerHTML = '<p class="text-center text-xs py-4 text-gray-400">Belum ada riwayat</p>';
+                    }
+
+                    if (user.role === 'admin') renderAdmin(res);
+                    updateGPSUI();
+                })
+                .withFailureHandler(err => {
+                    document.getElementById('refreshIcon')?.classList.remove('spinning');
+                    console.error('refreshData GAGAL:', err);
+                    showToast("Gagal memuat data dari server");
+                    initUserMap(office.lat, office.lng, office.rad);
+                })
+                .getDashboardData(user.id, user.role);
+        }
+
+        /* =============================================================
+           RENDER ADMIN DASHBOARD
+        ============================================================= */
+        function renderAdmin(res) {
+            if (!res || !res.stats) return;
+            const elST = document.getElementById('statTotal');   if (elST) elST.innerText = res.stats.totalPegawai;
+            const elSH = document.getElementById('statHadir');   if (elSH) elSH.innerText = res.stats.absenHariIni;
+            const elST2 = document.getElementById('statTotal2'); if (elST2) elST2.innerText = res.stats.totalPegawai;
+            const elSH2 = document.getElementById('statHadir2'); if (elSH2) elSH2.innerText = res.stats.absenHariIni;
+
+            const pendingCount = res.stats.izinPending || 0;
+            const badge = document.getElementById('izinPendingBadge');
+            if (badge) {
+                const elIPC = document.getElementById('izinPendingCount'); if (elIPC) elIPC.innerText = pendingCount;
+                badge.classList.toggle('hidden', pendingCount === 0);
+            }
+
+            if (res.allPermits) {
+                allIzinData = res.allPermits;
+                if (document.getElementById('tab-izin').classList.contains('active')) {
+                    applyIzinFilter();
+                }
+            }
+
+            if (document.getElementById('tab-setting').classList.contains('active')) {
+                initAdminMap(office.lat, office.lng, office.rad);
+            }
+
+            if (res.allUsers) {
+                _usersCache = res.allUsers;
+                const elPC = document.getElementById('pegawaiCount'); if (elPC) elPC.innerText = res.allUsers.length;
+                document.getElementById('adminUserTable').innerHTML = res.allUsers.map((u, i) => `
+                    <tr class="${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'} border-b border-gray-100 hover:bg-indigo-50 transition-colors">
+                        <td class="py-3 px-3 font-bold text-gray-400">${i + 1}</td>
+                        <td class="py-3 px-3 font-bold text-gray-900 whitespace-nowrap">${esc(u[1])}</td>
+                        <td class="py-3 px-3 text-gray-600">${esc(u[2] || '-')}</td>
+                        <td class="py-3 px-3 text-gray-600 whitespace-nowrap">${esc(u[3])}</td>
+                        <td class="py-3 px-3 text-center">
+                            <span class="px-2 py-1 rounded-lg text-[9px] font-black uppercase ${u[4] === 'admin' ? 'bg-amber-100 text-amber-700' : 'bg-indigo-50 text-indigo-600'}">${esc(u[4])}</span>
+                        </td>
+                        <td class="py-3 px-3 text-center">
+                            <div class="flex gap-1 justify-center">
+                                <button onclick="openUserModal('${esc(u[0])}','${esc(u[1])}','${esc(u[2])}','${esc(u[3])}','${esc(u[4])}')" class="w-7 h-7 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center hover:bg-indigo-100"><i class="fas fa-edit text-[10px]"></i></button>
+                                <button onclick="deleteUserUI('${esc(u[0])}')" class="w-7 h-7 bg-red-50 text-red-600 rounded-lg flex items-center justify-center hover:bg-red-100"><i class="fas fa-trash text-[10px]"></i></button>
+                            </div>
+                        </td>
+                    </tr>
+                `).join('');
+            }
+
+            if (res.allAttendance) {
+                document.getElementById('adminAbsenceLog').innerHTML = res.allAttendance.map(a => {
+                    var userName = esc(a[13] || 'Anonim');
+                    var mapsUrl  = a[12] || '#';
+                    var photoIn  = a[10] || '';
+                    var photoOut = a[11] || '';
+
+                    return `
+                        <div class="bg-white p-4 rounded-2xl border border-gray-100 space-y-3 shadow-sm">
+                            <div class="flex justify-between items-start">
+                                <div class="flex-1">
+                                    <h4 class="font-bold text-gray-900 text-sm">${userName}</h4>
+                                    <p class="text-[10px] text-gray-400 font-bold mb-1">${esc(a[2])}</p>
+                                    <p class="text-[9px] text-gray-500">Masuk: <span class="text-indigo-600 font-bold">${esc(a[3])}</span> • Keluar: <span class="text-red-500 font-bold">${esc(a[4] || '--')}</span></p>
+                                </div>
+                                <div class="flex gap-1 ml-2">
+                                    ${photoIn ? `<a href="${photoIn}" target="_blank" class="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 border-2 border-indigo-50 flex items-center justify-center" title="Foto Masuk">
+                                        <img src="${photoIn}" class="w-full h-full object-cover" onerror="this.outerHTML='<i class=\\'fas fa-user-circle text-xl text-gray-300\\'></i>'">
+                                    </a>` : ''}
+                                    ${photoOut ? `<a href="${photoOut}" target="_blank" class="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 border-2 border-red-50 flex items-center justify-center" title="Foto Keluar">
+                                        <img src="${photoOut}" class="w-full h-full object-cover" onerror="this.outerHTML='<i class=\\'fas fa-user-circle text-xl text-gray-300\\'></i>'">
+                                    </a>` : ''}
+                                </div>
+                            </div>
+                            <div class="pt-2 border-t border-dashed flex gap-2">
+                                <a href="${mapsUrl}" target="_blank" class="flex-1 bg-indigo-50 py-2 rounded-xl text-center text-[10px] font-bold text-indigo-600 active:scale-95 transition-all">
+                                    <i class="fas fa-map-location-dot mr-1"></i> Lacak Lokasi
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
+        /* =============================================================
+           CRUD PEGAWAI
+        ============================================================= */
+        function openUserModal(id = '', nama = '', jab = '', phone = '', role = 'pegawai') {
+            document.getElementById('editId').value   = id;
+            document.getElementById('uNama').value    = nama;
+            document.getElementById('uJab').value     = jab;
+            document.getElementById('uPhone').value   = phone;
+            document.getElementById('uRole').value    = role;
+            document.getElementById('uPass').value    = '';
+            document.getElementById('modalTitle').innerText = id ? "Edit Pegawai" : "Tambah Pegawai";
+            if (id) {
+                document.getElementById('uPass').placeholder = 'Password baru (kosongkan jika tidak diganti)';
+            } else {
+                document.getElementById('uPass').placeholder = 'Password';
+            }
+            document.getElementById('userModal').classList.replace('hidden', 'flex');
+        }
+
+        function closeUserModal() {
+            document.getElementById('userModal').classList.replace('flex', 'hidden');
+        }
+
+        function submitUser() {
+            const id   = document.getElementById('editId').value;
+            const data = {
+                id:       id,
+                nama:     document.getElementById('uNama').value.trim(),
+                jabatan:  document.getElementById('uJab').value.trim(),
+                phone:    document.getElementById('uPhone').value.trim(),
+                role:     document.getElementById('uRole').value,
+                password: document.getElementById('uPass').value
+            };
+
+            if (!data.nama || !data.phone) return showToast("Nama & HP wajib diisi!");
+            if (!id && !data.password)     return showToast("Password wajib diisi untuk pegawai baru!");
+
+            showToast("Menyimpan data...");
+            const func = id ? 'editUser' : 'addUser';
+            google.script.run
+                .withSuccessHandler(res => {
+                    showToast(res.message || 'Berhasil');
+                    closeUserModal();
+                    _usersCache = [];
+                    refreshData();
+                })
+                .withFailureHandler(() => showToast("Gagal simpan data"))
+            [func](data);
+        }
+
+        function deleteUserUI(id) {
+            // FIX: confirm() diblokir WebViewer — gunakan cara yang sama seperti logout
+            if (!window.AppInventor && !confirm("Hapus data pegawai ini permanen?")) return;
+            google.script.run
+                .withSuccessHandler(res => {
+                    showToast(res.message || 'Berhasil dihapus');
+                    _usersCache = [];
+                    refreshData();
+                })
+                .withFailureHandler(() => showToast("Gagal hapus data"))
+                .deleteUser(id);
+        }
+
+        /* =============================================================
+           GPS & MAP
+        ============================================================= */
+        let hasInitialGPSFix = false;
+
+        function receiveNativeLocation(lat, lng) {
+            currentLoc = { lat: parseFloat(lat), lng: parseFloat(lng) };
+            updateGPSUI();
+            updateUserMapLive();
+            if (!hasInitialGPSFix && userMap) {
+                hasInitialGPSFix = true;
+                centerMapOnUser();
+            }
+        }
+
+        // ── TERIMA FOTO DARI KODULAR (dipanggil via EvaluateJS) ──────────────
+// base64Data = string base64 MURNI (tanpa prefix data:image)
+// Pakai window. agar accessible dari EvaluateJS Kodular
+    function receivePhoto(base64Data) {
+    if (!attType) attType = localStorage.getItem('_attType') || 'IN';
+    localStorage.removeItem('_attType');
+
+    if (_permitMode) {
+        _permitMode = false;
+        document.getElementById('pFileData').value = base64Data;
+        document.getElementById('pFileName').value = 'foto_izin.jpg';
+        document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
+        return;
+    }
+
+    showToast("📷 Foto diterima, memproses...");
+
+    var img = new Image();
+    img.onload = function () {
+        var can  = document.getElementById('canvas');
+        var maxW = 400;
+        var scale = (img.width > maxW) ? maxW / img.width : 1;
+        can.width  = Math.round(img.width  * scale);
+        can.height = Math.round(img.height * scale);
+        can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
+        var compressed = can.toDataURL('image/jpeg', 0.35);
+
+        var sizeKB = Math.round(compressed.length * 0.75 / 1024);
+        if (sizeKB > 3000) {
+            showToast("⚠️ Foto terlalu besar (" + sizeKB + "KB), coba lagi.");
+            return;
+        }
+
+        _sendWithRetry(compressed, 1);
+    };
+    img.onerror = function () { showToast("❌ Gagal memuat foto, coba lagi."); };
+    img.src = 'data:image/jpeg;base64,' + base64Data;
+};
+
+function _sendWithRetry(dataUrl, attempt) {
+    showToast("📤 Mengirim absensi... mohon tunggu");
+
+    var tid = setTimeout(function () {
+        showToast("⏱ Server lambat. Cek riwayat absensi Anda.");
+    }, 40000);
+
+    google.script.run
+        .withSuccessHandler(function (res) {
+            clearTimeout(tid);
+            showToast(res.message);
+            if (res.success) refreshData();
+        })
+        .withFailureHandler(function (err) {
+            clearTimeout(tid);
+            var e = err ? (err.message || String(err)) : '';
+            if (attempt < 3 && (e.indexOf('2501') !== -1 || e.indexOf('SSL') !== -1 || e.indexOf('connect') !== -1)) {
+                showToast("🔄 Koneksi gagal, mencoba ulang (" + attempt + "/2)...");
+                setTimeout(function () { _sendWithRetry(dataUrl, attempt + 1); }, 3000);
+            } else {
+                showToast("❌ Gagal kirim absensi. Coba lagi.");
+                console.error("submitAttendance error:", e);
+            }
+        })
+        .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl);
+};
+
+        function initGPS() {
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition(pos => {
+                    currentLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                    updateGPSUI();
+                    updateUserMapLive();
+                    if (!hasInitialGPSFix && userMap) {
+                        hasInitialGPSFix = true;
+                        centerMapOnUser();
+                    }
+                }, err => console.error('GPS error:', err), {
+                    enableHighAccuracy: true,
+                    maximumAge: 0,
+                    timeout: 10000
+                });
+            }
+        }
+
+        function updateGPSUI() {
+            if (!office.lat) return;
+            const dist     = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
+            const el       = document.getElementById('gpsStatus');
+            const distInfo = document.getElementById('distInfo');
+
+            if (dist <= office.rad) {
+                el.innerHTML  = '<span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span> LOKASI VALID';
+                el.className  = "px-3 py-2 rounded-xl text-[9px] font-black border border-emerald-100 bg-emerald-50 text-emerald-600 flex items-center gap-2";
+                distInfo.innerHTML = `<span class="text-emerald-600 italic font-black">Sudah dalam area kantor ✅</span>`;
+                if (userOfficeCircle) userOfficeCircle.setStyle({ color: '#10b981', fillColor: '#10b981' });
+            } else {
+                el.innerHTML  = `<span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span> LUAR RADIUS (${Math.round(dist)}m)`;
+                el.className  = "px-3 py-2 rounded-xl text-[9px] font-black border border-red-100 bg-red-50 text-red-600 flex items-center gap-2";
+                distInfo.innerHTML = `Jarak: <span class="text-red-500 font-bold">${Math.round(dist)}m</span> lagi untuk bisa absen 📍`;
+                if (userOfficeCircle) userOfficeCircle.setStyle({ color: '#ef4444', fillColor: '#ef4444' });
+            }
+        }
+
+        function initUserMap(lat, lng, rad) {
+            const mc = document.getElementById('user-map');
+            if (!mc) return;
+
+            if (lat && lng) {
+                office.lat = lat;
+                office.lng = lng;
+                office.rad = rad || office.rad;
+            }
+
+            if (!office.lat || !office.lng) return;
+
+            userMap = true;
+            hasInitialGPSFix = true;
+            renderUserMapUI();
+            updateGPSUI();
+        }
+
+        function renderUserMapUI() {
+            const mc = document.getElementById('user-map');
+            if (!mc) return;
+            var dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
+            var inRange = dist <= office.rad;
+            var barW = Math.min(100, Math.round((office.rad / Math.max(dist, office.rad)) * 100));
+
+            mc.innerHTML = `
+            <div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px;box-sizing:border-box;background:#f8fafc;border-radius:24px;">
+                <div style="font-size:48px;line-height:1;">${inRange ? '✅' : '📍'}</div>
+                <div style="text-align:center;">
+                    <div style="font-size:11px;font-weight:900;color:#6366f1;text-transform:uppercase;letter-spacing:1px;">
+                        ${inRange ? 'DALAM RADIUS KANTOR' : 'LUAR RADIUS KANTOR'}
+                    </div>
+                    <div style="font-size:22px;font-weight:900;color:${inRange ? '#10b981' : '#ef4444'};margin-top:2px;">
+                        ${Math.round(dist)} m
+                    </div>
+                    <div style="font-size:10px;color:#94a3b8;font-weight:600;">dari titik kantor (radius ${office.rad}m)</div>
+                </div>
+                <div style="width:100%;background:#e2e8f0;border-radius:99px;height:8px;overflow:hidden;">
+                    <div style="height:100%;width:${barW}%;background:${inRange ? '#10b981' : '#ef4444'};border-radius:99px;transition:width 0.5s;"></div>
+                </div>
+                ${currentLoc.lat !== 0 ? `<div style="font-size:9px;color:#94a3b8;font-weight:700;">📡 ${currentLoc.lat.toFixed(5)}, ${currentLoc.lng.toFixed(5)}</div>` : '<div style="font-size:9px;color:#94a3b8;">📡 Menunggu sinyal GPS...</div>'}
+            </div>`;
+        }
+
+        function updateUserMapLive() {
+            if (userMap) renderUserMapUI();
+        }
+
+        function centerMapOnUser() {
+            if (userMap) renderUserMapUI();
+        }
+
+        function initAdminMap(lat, lng, rad) {
+            if (!lat || !lng) return;
+            var mc = document.getElementById('admin-map');
+            if (!mc) return;
+
+            var elLat = document.getElementById('adm-lat');
+            var elLng = document.getElementById('adm-lng');
+            var elRad = document.getElementById('adm-rad');
+            if (elLat && !elLat.value) elLat.value = lat.toFixed(6);
+            if (elLng && !elLng.value) elLng.value = lng.toFixed(6);
+            if (elRad && !elRad.value) elRad.value = rad;
+
+            var mapsUrl = 'https://www.google.com/maps?q=' + lat + ',' + lng + '&z=17';
+            mc.innerHTML = '<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;box-sizing:border-box;">' +
+                '<div style="font-size:40px;">🏢</div>' +
+                '<div style="text-align:center;">' +
+                    '<div style="font-size:10px;font-weight:900;color:#818cf8;text-transform:uppercase;letter-spacing:1px;">Titik Kantor</div>' +
+                    '<div style="font-size:13px;font-weight:800;color:white;margin-top:4px;">' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</div>' +
+                    '<div style="font-size:10px;color:#94a3b8;margin-top:2px;">Radius: ' + rad + ' meter</div>' +
+                '</div>' +
+                '<a href="' + mapsUrl + '" target="_blank" style="background:#6366f1;color:white;font-size:10px;font-weight:800;padding:8px 20px;border-radius:12px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;">🗺️ Buka di Google Maps</a>' +
+                '<div style="font-size:9px;color:#64748b;text-align:center;">Ubah koordinat: isi Lat/Lng di bawah lalu klik SIMPAN</div>' +
+            '</div>';
+
+            adminMap = true;
+        }
+
+        function saveGPS() {
+            const la = document.getElementById('adm-lat').value;
+            const ln = document.getElementById('adm-lng').value;
+            const rd = document.getElementById('adm-rad').value;
+            if (!la || !ln || !rd) return showToast("Isi semua data!");
+
+            const laNum = parseFloat(la);
+            const lnNum = parseFloat(ln);
+
+            if (Math.abs(laNum) > 90 || Math.abs(lnNum) > 180) {
+                return showToast("Koordinat tidak valid! Periksa kembali Lat/Lng.");
+            }
+
+            office = { lat: laNum, lng: lnNum, rad: parseInt(rd) };
+            localStorage.setItem('presensi_office_v3', JSON.stringify(office));
+
+            showToast("Menyimpan...");
+            google.script.run
+                .withSuccessHandler(res => {
+                    showToast(res.message);
+                    refreshData();
+                })
+                .withFailureHandler(() => showToast("Gagal simpan setting"))
+                .updateOfficeSettings(laNum, lnNum, rd);
+        }
+
+        /* =============================================================
+           ADMIN IZIN — APPROVAL TAB
+        ============================================================= */
+        var allIzinData = [];
+
+        // ② loadAdminIzin — filter allPermits berdasarkan role
+function loadAdminIzin() {
+    const listEl = document.getElementById('adminIzinList');
+    listEl.innerHTML = '<p class="text-center text-xs py-8 text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>Memuat data...</p>';
+    google.script.run
+        .withSuccessHandler(function(res) {
+            const allData = (res && res.allPermits) ? res.allPermits : [];
+
+            // Pegawai hanya lihat izin milik sendiri
+            allIzinData = (user.role === 'admin')
+                ? allData
+                : allData.filter(function(p) { return String(p[1]) === String(user.id); });
+
+            // Sembunyikan/tampilkan filter panel sesuai role
+            const filterPanel = document.getElementById('izinFilterPanel');
+            if (filterPanel) {
+                filterPanel.classList.toggle('hidden', user.role !== 'admin');
+            }
+
+            applyIzinFilter();
+        })
+        .withFailureHandler(function() {
+            listEl.innerHTML = '<p class="text-center text-xs py-8 text-red-400">Gagal memuat data izin</p>';
+        })
+        .getDashboardData(user.id, user.role);
+}
+
+        function applyIzinFilter() {
+            const filterStatus = document.getElementById('filterIzinStatus').value;
+            const filterJenis  = document.getElementById('filterIzinJenis').value;
+            const filtered = allIzinData.filter(function(p) {
+                const statusOk = !filterStatus || p[7] === filterStatus;
+                const jenisOk  = !filterJenis  || p[4] === filterJenis;
+                return statusOk && jenisOk;
+            });
+            renderAdminIzin(filtered);
+        }
+
+        function resetIzinFilter() {
+            document.getElementById('filterIzinStatus').value = '';
+            document.getElementById('filterIzinJenis').value  = '';
+            renderAdminIzin(allIzinData);
+        }
+
+        // ③ renderAdminIzin — tombol approve/tolak hanya admin,
+//    pegawai hanya lihat status
+function renderAdminIzin(data) {
+    document.getElementById('izinCount').innerText = 'Total: ' + data.length + ' data';
+    const listEl = document.getElementById('adminIzinList');
+    if (!data.length) {
+        listEl.innerHTML = user.role === 'admin'
+            ? '<p class="text-center text-xs py-8 text-gray-400">Tidak ada data izin</p>'
+            : '<p class="text-center text-xs py-8 text-gray-400">Belum ada pengajuan izin</p>';
+        return;
+    }
+    listEl.innerHTML = data.map(function(p) {
+        const id       = p[0];
+        const nama     = esc(p[2] || 'Anonim');
+        const tgl      = esc(p[3] || '-');
+        const jenis    = esc(p[4] || '-');
+        const alasan   = esc(p[5] || '-');
+        const lampiran = p[6] || '';
+        const status   = p[7] || 'Menunggu';
+
+        const scBadge = status === 'Disetujui'
+            ? 'bg-emerald-100 text-emerald-700'
+            : status === 'Ditolak'
+                ? 'bg-red-100 text-red-600'
+                : 'bg-amber-100 text-amber-700';
+        const jenisIcon = jenis === 'Sakit'
+            ? 'fa-notes-medical text-red-400'
+            : jenis === 'Cuti'
+                ? 'fa-umbrella-beach text-sky-400'
+                : 'fa-file-medical text-amber-400';
+
+        // Tombol approve/tolak HANYA untuk admin
+        let actionHtml = '';
+        if (user.role === 'admin') {
+            actionHtml = status === 'Menunggu'
+                ? `<button onclick="updateIzinStatus('${id}','Disetujui')"
+                        class="flex-1 bg-emerald-500 text-white py-2.5 rounded-xl text-[10px] font-bold active:scale-95 transition-all shadow-sm">
+                        <i class="fas fa-check mr-1"></i> Setujui
+                   </button>
+                   <button onclick="updateIzinStatus('${id}','Ditolak')"
+                        class="flex-1 bg-red-500 text-white py-2.5 rounded-xl text-[10px] font-bold active:scale-95 transition-all shadow-sm">
+                        <i class="fas fa-times mr-1"></i> Tolak
+                   </button>`
+                : `<span class="flex-1 text-center text-[10px] font-bold text-gray-400 py-2">Sudah diproses</span>`;
+        } else {
+            // Pegawai: hanya tampilkan keterangan status
+            actionHtml = `<span class="flex-1 text-center text-[10px] font-bold text-gray-400 py-2">
+                ${status === 'Menunggu' ? 'Menunggu persetujuan admin' : 'Sudah diproses'}
+            </span>`;
+        }
+
+        // Nama hanya tampil untuk admin (pegawai sudah tahu ini izin mereka sendiri)
+        const namaRow = user.role === 'admin'
+            ? `<h4 class="font-black text-gray-900 text-sm truncate">${nama}</h4>`
+            : '';
+
+        return `
+        <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+            <div class="flex items-start gap-3">
+                <div class="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center flex-shrink-0">
+                    <i class="fas ${jenisIcon} text-base"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="flex justify-between items-center mb-0.5">
+                        ${namaRow}
+                        <span class="ml-2 px-2 py-0.5 rounded-lg text-[9px] font-black uppercase flex-shrink-0 ${scBadge}">${esc(status)}</span>
+                    </div>
+                    <p class="text-[10px] font-bold text-indigo-600">${tgl} • ${jenis}</p>
+                    <p class="text-[10px] text-gray-500 mt-0.5 line-clamp-2">${alasan}</p>
+                </div>
+            </div>
+            ${lampiran ? `
+            <div class="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-xl">
+                <i class="fas fa-paperclip text-gray-400 text-xs"></i>
+                <a href="${lampiran}" target="_blank" class="text-[10px] font-bold text-indigo-600 truncate underline">Lihat Lampiran</a>
+            </div>` : ''}
+            <div class="flex gap-2 pt-1 border-t border-dashed border-gray-100">
+                ${actionHtml}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+        function updateIzinStatus(id, status) {
+            // FIX: confirm() diblokir WebViewer — skip konfirmasi di Kodular
+            const label = status === 'Disetujui' ? 'menyetujui' : 'menolak';
+            if (!window.AppInventor && !confirm('Yakin ' + label + ' pengajuan izin ini?')) return;
+            showToast('Memproses...');
+            google.script.run
+                .withSuccessHandler(function(res) {
+                    if (res && res.success) {
+                        showToast('Status izin diperbarui!');
+                        loadAdminIzin();
+                        refreshData();
+                    } else {
+                        showToast(res ? res.message : 'Gagal memperbarui status');
+                    }
+                })
+                .withFailureHandler(function() { showToast('Gagal terhubung ke server'); })
+                .updatePermitStatus(id, status);
+        }
+
+        /* =============================================================
+           IZIN / PERMITS
+        ============================================================= */
+        var _permitMode = false;
+
+        function openPermitModal() {
+            const tzoffset    = (new Date()).getTimezoneOffset() * 60000;
+            const localISOTime = (new Date(Date.now() - tzoffset)).toISOString().split('T')[0];
+            document.getElementById('pDate').value   = localISOTime;
+            document.getElementById('pReason').value = '';
+            document.getElementById('pFileData').value  = '';
+            document.getElementById('pFileName').value  = '';
+            document.getElementById('pFileLabel').innerText = '📷 Tap untuk ambil foto';
+            document.getElementById('permitModal').classList.replace('hidden', 'flex');
+        }
+
+        function triggerPermitPhoto() {
+            if (window.AppInventor) {
+                _permitMode = true;
+                window.AppInventor.setWebViewString('openCamera');
+            } else {
+                document.getElementById('pFileCameraWeb').click();
+            }
+        }
+
+        function handleWebPermitPhoto(input) {
+            if (!input.files || !input.files[0]) return;
+            var file = input.files[0];
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                var base64 = e.target.result.split(',')[1];
+                document.getElementById('pFileData').value = base64;
+                document.getElementById('pFileName').value = file.name || 'foto_izin.jpg';
+                document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function closePermitModal() {
+            document.getElementById('permitModal').classList.replace('flex', 'hidden');
+        }
+
+        function submitPermitAction() {
+            const pType     = document.getElementById('pType').value;
+            const pDate     = document.getElementById('pDate').value;
+            const pReason   = document.getElementById('pReason').value.trim();
+            const pFileData = document.getElementById('pFileData').value;
+            const pFileName = document.getElementById('pFileName').value;
+            const btn       = document.getElementById('btnSubmitPermit');
+
+            if (!pDate || !pReason) return showToast("Tanggal & Alasan wajib diisi!");
+            if (!pFileData)         return showToast("Wajib melampirkan foto bukti!");
+
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+            btn.disabled  = true;
+
+            const permitData = {
+                userId:   user.id,
+                date:     pDate,
+                type:     pType,
+                reason:   pReason,
+                fileName: pFileName,
+                fileData: pFileData
+            };
+
+            google.script.run
+                .withSuccessHandler(res => {
+                    btn.innerHTML = 'Kirim';
+                    btn.disabled  = false;
+                    if (res && res.success) {
+                        showToast(res.message);
+                        closePermitModal();
+                        refreshData();
+                    } else {
+                        showToast(res ? res.message : "Terjadi kesalahan");
+                    }
+                })
+                .withFailureHandler(() => {
+                    btn.innerHTML = 'Kirim';
+                    btn.disabled  = false;
+                    showToast("Gagal mengirim data.");
+                })
+                .submitPermit(permitData);
+        }
+
+        /* =============================================================
+           UTILITIES
+        ============================================================= */
+        // Polling WebViewString dari Kodular
+        var _processingPhoto = false;
+setInterval(function() {
+    if (!window.AppInventor || _processingPhoto) return;
+    var str = window.AppInventor.getWebViewString();
+    if (str && str !== 'openCamera' && str.length > 100) {
+        _processingPhoto = true;
+        window.AppInventor.setWebViewString('');
+        receivePhoto(str);
+        setTimeout(function() { _processingPhoto = false; }, 5000);
+    }
+}, 500);
+
+        function calculateDist(l1, ln1, l2, ln2) {
+            const R   = 6371e3;
+            const dLa = (l2 - l1) * Math.PI / 180;
+            const dLn = (ln2 - ln1) * Math.PI / 180;
+            const a   = Math.sin(dLa / 2) * Math.sin(dLa / 2) +
+                        Math.cos(l1 * Math.PI / 180) * Math.cos(l2 * Math.PI / 180) *
+                        Math.sin(dLn / 2) * Math.sin(dLn / 2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            if (!t) { console.warn('Toast not found:', msg); return; }
+            t.innerText = msg;
+            t.style.bottom = '110px';
+            setTimeout(() => t.style.bottom = '-100px', 3000);
+        }
+
+        // Metode 1: dipanggil dari EvaluateJS Kodular via variabel global
+        // Blok Kodular: EvaluateJS "window._kodularPhoto='"+base64Data+"';receiveKodularPhoto();"
+        function receiveKodularPhoto() {
+            var data = window._kodularPhoto || '';
+            window._kodularPhoto = '';
+            if (!data || data.length < 100) {
+                showToast('Foto tidak valid, coba lagi.');
+                return;
+            }
+            receivePhoto(data);
+        }
+
+        function receiveKodularPhoto() {
+    var base64Data = window.kodularPhoto || '';
+    if (!base64Data) {
+        showToast("Gagal menerima foto dari kamera.");
+        return;
+    }
+    window.kodularPhoto = '';
+    receivePhoto(base64Data);
+}
+
+
+
+    </script>
