@@ -418,7 +418,24 @@
             </div>
         </div>
     </div>
-
+    <!-- MODAL: KONFIRMASI LOGOUT -->
+<div id="logoutModal"
+    class="fixed inset-0 z-[800] bg-black/60 backdrop-blur-sm hidden items-center justify-center p-6">
+    <div class="bg-white w-full max-w-xs rounded-[2.5rem] p-8 space-y-4 shadow-2xl text-center">
+        <h3 class="text-lg font-black text-gray-900">Yakin ingin keluar?</h3>
+        <p class="text-xs text-gray-400">Kamu perlu login kembali untuk menggunakan aplikasi.</p>
+        <div class="flex gap-3 pt-2">
+            <button onclick="closeLogoutModal()"
+                class="flex-1 py-4 font-bold text-gray-400 bg-gray-100 rounded-2xl active:scale-95 transition-all">
+                Batal
+            </button>
+            <button onclick="doLogout()"
+                class="flex-1 bg-red-500 text-white rounded-2xl font-bold py-4 shadow-lg active:scale-95 transition-all">
+                <i class="fas fa-power-off mr-1"></i> Keluar
+            </button>
+        </div>
+    </div>
+</div>
     <div id="toast" class="toast">Notifikasi...</div>
 
     <?!= include('script'); ?>
