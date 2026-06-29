@@ -268,31 +268,33 @@ function getAttendanceColumnMap() {
 
 function checkLogin(phone, password) {
   try {
-    // [FIX #5] Validasi input
     if (!phone || !password) return { success: false, message: 'Nomor HP dan password wajib diisi.' };
 
-    const col        = getUserColumnMap();
-    const sheet      = getSheetSafe('Users');
-    const data       = sheet.getDataRange().getValues();
-    const hashedInput = hashPassword(password);
+    const col         = getUserColumnMap();
+    const sheet       = getSheetSafe('Users');
+    const data        = sheet.getDataRange().getValues();
+    const hashedInput = hashPassword(String(password).trim());
+    const phoneTrim   = String(phone).trim();
 
     for (let i = 1; i < data.length; i++) {
       const storedPhone = String(data[i][col.phone]).trim();
       const storedPass  = String(data[i][col.password]).trim();
 
-      if (storedPhone !== String(phone).trim()) continue;
+      if (storedPhone !== phoneTrim) continue;
 
-      // Dukung password lama (plaintext) sekaligus hash baru
-      const match = (storedPass === hashedInput) || (storedPass === password);
-      if (match) {
-        // Kalau masih plaintext, migrasi otomatis ke hash
-        if (storedPass === password) {
+      // Coba hash dulu, fallback plaintext untuk data lama
+      const matchHash  = (storedPass === hashedInput);
+      const matchPlain = (storedPass === String(password).trim());
+
+      if (matchHash || matchPlain) {
+        // Auto-migrasi plaintext → hash
+        if (matchPlain && !matchHash) {
           sheet.getRange(i + 1, col.password + 1).setValue(hashedInput);
         }
         return {
           success: true,
           user: {
-            id:      data[i][col.id],
+            id:      String(data[i][col.id]),
             nama:    data[i][col.nama],
             jabatan: data[i][col.jabatan],
             phone:   data[i][col.phone],
@@ -300,12 +302,89 @@ function checkLogin(phone, password) {
           }
         };
       }
-      // Phone cocok tapi password salah — hentikan pencarian
       return { success: false, message: 'Nomor HP atau Password salah!' };
     }
     return { success: false, message: 'Nomor HP atau Password salah!' };
   } catch (e) {
     return { success: false, message: e.toString() };
+  }
+}
+
+function getDashboardData(userId, role) {
+  try {
+    // ── VALIDASI SESI ─────────────────────────────────────────────────
+    // Cek apakah userId masih ada di sheet Users
+    const col       = getUserColumnMap();
+    const usersSheet = getSheetSafe('Users');
+    const usersData  = usersSheet.getDataRange().getValues();
+    const stillExists = usersData.slice(1).some(function(r) {
+      return String(r[col.id]) === String(userId);
+    });
+    if (!stillExists) {
+      return { invalidSession: true };
+    }
+    // ── AKHIR VALIDASI SESI ───────────────────────────────────────────
+
+    const att         = getSheetData('Attendance');
+    const permits     = getSheetData('Permits');
+    const users       = getNormalizedUsers();
+    const rawSettings = getSettings();
+    const settings    = Object.assign({}, rawSettings, {
+      office_lat: normalizeCoordinate(rawSettings.office_lat, 90),
+      office_lng: normalizeCoordinate(rawSettings.office_lng, 180)
+    });
+
+    const today       = Utilities.formatDate(new Date(), 'GMT+7', 'yyyy-MM-dd');
+    const attData     = att.slice(1);
+    const permitsData = permits.slice(1);
+    const attCol      = getAttendanceColumnMap();
+
+    const historyNorm = attData
+      .filter(function(r) { return String(r[attCol.userId]) == String(userId); })
+      .slice(-10).reverse()
+      .map(function(r) {
+        return [
+          r[attCol.id], r[attCol.userId],
+          formatTgl(r[attCol.tgl]), r[attCol.jamIn], r[attCol.jamOut],
+          r[attCol.lat], r[attCol.lng], r[attCol.latOut], r[attCol.lngOut],
+          r[attCol.status], r[attCol.photoIn], r[attCol.photoOut]
+        ];
+      });
+
+    const allAttNorm = attData.slice().reverse().map(function(r) {
+      var found   = users.find(function(u) { return String(u[0]) == String(r[attCol.userId]); });
+      var mapsUrl = 'https://www.google.com/maps?q=' + r[attCol.lat] + ',' + r[attCol.lng];
+      var nama    = found ? found[1] : (attCol.nama >= 0 ? r[attCol.nama] : 'Anonim');
+      return [
+        r[attCol.id], r[attCol.userId],
+        formatTgl(r[attCol.tgl]), r[attCol.jamIn], r[attCol.jamOut],
+        r[attCol.lat], r[attCol.lng], r[attCol.latOut], r[attCol.lngOut],
+        r[attCol.status], r[attCol.photoIn], r[attCol.photoOut],
+        mapsUrl, nama
+      ];
+    });
+
+    const hadirHariIni = attData.filter(function(r) {
+      return formatTgl(r[attCol.tgl]) == today;
+    }).length;
+
+    return {
+      stats: {
+        totalPegawai: users.length,
+        absenHariIni: hadirHariIni,
+        izinPending:  permitsData.filter(function(r) { return r[7] == 'Menunggu'; }).length
+      },
+      history:       historyNorm,
+      userPermits:   permitsData
+                       .filter(function(r) { return String(r[1]) == String(userId); })
+                       .slice(-10).reverse(),
+      allPermits:    permitsData.slice().reverse(),
+      allAttendance: allAttNorm,
+      allUsers:      users,
+      settings:      settings
+    };
+  } catch (e) {
+    return { error: e.toString() };
   }
 }
 
