@@ -1314,7 +1314,19 @@ function renderAdminIzin(data) {
             setTimeout(() => t.style.bottom = '-100px', 3000);
         }
 
-        // Polling WebViewString dari Kodular
+        // Metode 1: dipanggil dari EvaluateJS Kodular via variabel global
+        // Blok Kodular: EvaluateJS "window._kodularPhoto='"+base64Data+"';receiveKodularPhoto();"
+        function receiveKodularPhoto() {
+            var data = window._kodularPhoto || '';
+            window._kodularPhoto = '';
+            if (!data || data.length < 100) {
+                showToast('Foto tidak valid, coba lagi.');
+                return;
+            }
+            receivePhoto(data);
+        }
+
+        // Metode 2: Fallback polling WebViewString
         setInterval(function() {
             if (window.AppInventor) {
                 var str = window.AppInventor.getWebViewString();
