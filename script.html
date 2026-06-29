@@ -1326,6 +1326,16 @@ function renderAdminIzin(data) {
             receivePhoto(data);
         }
 
+        function receiveKodularPhoto() {
+    var base64Data = window.kodularPhoto || '';
+    if (!base64Data) {
+        showToast("Gagal menerima foto dari kamera.");
+        return;
+    }
+    window.kodularPhoto = '';
+    receivePhoto(base64Data);
+}
+
         // Metode 2: Fallback polling WebViewString
         setInterval(function() {
             if (window.AppInventor) {
