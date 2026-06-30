@@ -1,4 +1,3 @@
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
         /* =============================================================
            NOTE: Escape iframe dihapus — diblokir browser modern (cross-origin).
@@ -9,7 +8,7 @@
            VARIABEL GLOBAL
         ============================================================= */
         let user = null;
-        let office = { lat: -6.200000, lng: 106.816666, rad: 100 };
+        let office = { lat: 3.509973, lng: 98.895861, rad: 100 };
         let currentLoc = { lat: 0, lng: 0 };
         let attType = '';
 
@@ -279,6 +278,95 @@
         }
 
         /* =============================================================
+           EXPORT PDF — pakai window.print() dengan CSS print khusus
+        ============================================================= */
+        function exportPDF() {
+            var filterBulan   = document.getElementById('filterBulan').value;
+            var filterTanggal = document.getElementById('filterTanggal').value;
+
+            // Tentukan data yang akan dicetak
+            var dataCetak = allLogData;
+            var judulFilter = 'Semua Data';
+            if (filterBulan) {
+                dataCetak = allLogData.filter(function(a) { return a[2] && a[2].startsWith(filterBulan); });
+                var parts = filterBulan.split('-');
+                var bulanNames = ['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+                judulFilter = 'Bulan ' + bulanNames[parseInt(parts[1])] + ' ' + parts[0];
+            } else if (filterTanggal) {
+                dataCetak = allLogData.filter(function(a) { return a[2] === filterTanggal; });
+                judulFilter = 'Tanggal ' + filterTanggal;
+            }
+
+            if (!dataCetak.length) {
+                showToast('Tidak ada data untuk di-export!');
+                return;
+            }
+
+            // Hitung statistik
+            var totalHadir = dataCetak.filter(function(a) { return (a[9] || 'Hadir') === 'Hadir'; }).length;
+            var totalIzin  = dataCetak.length - totalHadir;
+            var printed    = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+
+            // Buat isi tabel
+            var rows = dataCetak.map(function(a, i) {
+                var status = a[9] || 'Hadir';
+                var statusColor = status === 'Hadir' ? '#10b981' : '#f59e0b';
+                return '<tr style="background:' + (i%2===0?'#fff':'#f8fafc') + ';">' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">' + (i+1) + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;">' + esc(a[13] || '-') + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">' + esc(a[2] || '-') + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;color:#6366f1;font-weight:700;">' + esc(a[3] || '-') + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;color:#ef4444;font-weight:700;">' + esc(a[4] || '--:--') + '</td>' +
+                    '<td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;"><span style="background:' + statusColor + '22;color:' + statusColor + ';padding:2px 8px;border-radius:6px;font-size:10px;font-weight:800;">' + esc(status) + '</span></td>' +
+                '</tr>';
+            }).join('');
+
+            // Buat halaman print
+            var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+                '<title>Log Absensi - ' + judulFilter + '</title>' +
+                '<style>' +
+                    'body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1e293b;}' +
+                    'h1{font-size:20px;font-weight:900;margin:0;color:#1e293b;}' +
+                    'h2{font-size:13px;font-weight:600;color:#6366f1;margin:4px 0 0;}' +
+                    '.header{border-bottom:3px solid #6366f1;padding-bottom:12px;margin-bottom:16px;}' +
+                    '.stats{display:flex;gap:16px;margin-bottom:16px;}' +
+                    '.stat{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;text-align:center;}' +
+                    '.stat-num{font-size:22px;font-weight:900;color:#6366f1;}' +
+                    '.stat-lbl{font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;}' +
+                    'table{width:100%;border-collapse:collapse;font-size:12px;}' +
+                    'thead tr{background:#1e293b;color:white;}' +
+                    'thead th{padding:10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;}' +
+                    '.footer{margin-top:16px;font-size:10px;color:#94a3b8;text-align:right;}' +
+                    '@media print{body{padding:10px;}button{display:none!important;}}' +
+                '</style></head><body>' +
+                '<div class="header">' +
+                    '<h1>📋 Laporan Log Absensi</h1>' +
+                    '<h2>Presensi Solider &nbsp;|&nbsp; ' + judulFilter + '</h2>' +
+                '</div>' +
+                '<div class="stats">' +
+                    '<div class="stat"><div class="stat-num">' + dataCetak.length + '</div><div class="stat-lbl">Total Data</div></div>' +
+                    '<div class="stat"><div class="stat-num" style="color:#10b981;">' + totalHadir + '</div><div class="stat-lbl">Hadir</div></div>' +
+                    '<div class="stat"><div class="stat-num" style="color:#f59e0b;">' + totalIzin + '</div><div class="stat-lbl">Izin/Lainnya</div></div>' +
+                '</div>' +
+                '<table>' +
+                    '<thead><tr><th>#</th><th>Nama</th><th>Tanggal</th><th>Jam Masuk</th><th>Jam Keluar</th><th>Status</th></tr></thead>' +
+                    '<tbody>' + rows + '</tbody>' +
+                '</table>' +
+                '<div class="footer">Dicetak pada ' + printed + ' &nbsp;|&nbsp; Presensi Solider</div>' +
+                '<br><button onclick="window.print()" style="background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">🖨️ Cetak / Save PDF</button>' +
+                '</body></html>';
+
+            var win = window.open('', '_blank');
+            if (!win) {
+                showToast('Popup diblokir! Izinkan popup di browser.');
+                return;
+            }
+            win.document.write(html);
+            win.document.close();
+            win.focus();
+        }
+
+        /* =============================================================
            LOGIN & LOGOUT
            FIX: btn.disabled = true agar tidak bisa double-klik
         ============================================================= */
@@ -313,7 +401,8 @@
         }
 
         // Tekan Enter di field password langsung login
-        document.addEventListener('DOMContentLoaded', () => {
+        // FIX: pakai window load agar jalan di iframe GAS
+        window.addEventListener('load', () => {
             const passField = document.getElementById('loginPass');
             if (passField) passField.addEventListener('keydown', e => {
                 if (e.key === 'Enter') handleLogin();
@@ -330,14 +419,16 @@
             // secara manual tanpa reload browser sama sekali.
             user = null;
 
-            try { if (userMap) { userMap.remove(); userMap = null; } } catch (e) {}
-            try { if (adminMap) { adminMap.remove(); adminMap = null; } } catch (e) {}
+            userMap = null;
+            adminMap = null;
             userPosMarker = null;
             userOfficeCircle = null;
             userOfficeMarker = null;
             adminMarker = null;
             adminCircle = null;
             hasInitialGPSFix = false;
+            const mc = document.getElementById('user-map');
+            if (mc) mc.innerHTML = '';
 
             // Reset form login
             document.getElementById('loginPhone').value = '';
@@ -360,22 +451,35 @@
         /* =============================================================
            KAMERA & SELFIE
         ============================================================= */
-        // Dipanggil saat label diklik — cek radius dulu, lalu biarkan label buka input (web) atau trigger Kodular
+        // [FIX] Guard anti dobel-klik. WebView Android kadang mengirim event
+        // click 2x untuk satu tap (touch + simulated mouse click), yang
+        // menyebabkan setWebViewString("openCamera") terpanggil 2x dan
+        // kamera Kodular kebuka dua kali. Guard ini mengabaikan pemanggilan
+        // kedua jika terjadi dalam jeda < 1500ms dari pemanggilan pertama.
+        var _lastAttendanceClickTs = 0;
+
+        // Dipanggil saat tombol diklik — cek radius dulu, lalu trigger input (web) atau Kodular
         function handleAttendanceClick(type, event) {
+            if (event && event.preventDefault) event.preventDefault();
+
+            const now = Date.now();
+            if (now - _lastAttendanceClickTs < 1500) {
+                console.warn('handleAttendanceClick diabaikan (dobel klik/event):', type);
+                return;
+            }
+            _lastAttendanceClickTs = now;
+
             attType = type;
             const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
             if (dist > office.rad) {
-                event.preventDefault();
                 return showToast("Gagal: Anda berada di luar radius kantor!");
             }
             if (window.AppInventor) {
-                event.preventDefault();
                 window.AppInventor.setWebViewString("openCamera");
                 return;
             }
             // Browser web (termasuk di dalam iframe GAS):
             // Trigger input file secara manual agar kamera terbuka langsung
-            event.preventDefault();
             var inputId = (type === 'IN') ? 'cameraInputMasuk' : 'cameraInputKeluar';
             document.getElementById(inputId).click();
         }
@@ -553,16 +657,16 @@ const izinItems = (res.userPermits || []).map(p => ({
         ============================================================= */
         function renderAdmin(res) {
             if (!res || !res.stats) return;
-            document.getElementById('statTotal').innerText  = res.stats.totalPegawai;
-            document.getElementById('statHadir').innerText  = res.stats.absenHariIni;
-            document.getElementById('statTotal2').innerText = res.stats.totalPegawai;
-            document.getElementById('statHadir2').innerText = res.stats.absenHariIni;
+            const elST = document.getElementById('statTotal');   if (elST) elST.innerText = res.stats.totalPegawai;
+            const elSH = document.getElementById('statHadir');   if (elSH) elSH.innerText = res.stats.absenHariIni;
+            const elST2 = document.getElementById('statTotal2'); if (elST2) elST2.innerText = res.stats.totalPegawai;
+            const elSH2 = document.getElementById('statHadir2'); if (elSH2) elSH2.innerText = res.stats.absenHariIni;
 
             // Update badge pending izin di tab Izin
             const pendingCount = res.stats.izinPending || 0;
             const badge = document.getElementById('izinPendingBadge');
             if (badge) {
-                document.getElementById('izinPendingCount').innerText = pendingCount;
+                const elIPC = document.getElementById('izinPendingCount'); if (elIPC) elIPC.innerText = pendingCount;
                 badge.classList.toggle('hidden', pendingCount === 0);
             }
 
@@ -581,7 +685,7 @@ const izinItems = (res.userPermits || []).map(p => ({
 
             if (res.allUsers) {
                 _usersCache = res.allUsers; // simpan cache untuk keperluan edit
-                document.getElementById('pegawaiCount').innerText = res.allUsers.length;
+                const elPC = document.getElementById('pegawaiCount'); if (elPC) elPC.innerText = res.allUsers.length;
                 document.getElementById('adminUserTable').innerHTML = res.allUsers.map((u, i) => `
                     <tr class="${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'} border-b border-gray-100 hover:bg-indigo-50 transition-colors">
                         <td class="py-3 px-3 font-bold text-gray-400">${i + 1}</td>
@@ -816,115 +920,50 @@ const izinItems = (res.userPermits || []).map(p => ({
                 office.rad = rad || office.rad;
             }
 
-            if (userMap) {
-                try {
-                    userOfficeCircle.setLatLng([office.lat, office.lng]).setRadius(office.rad);
-                    userOfficeMarker.setLatLng([office.lat, office.lng]);
-                    userMap.invalidateSize();
-                    fitMapView();
-                } catch (e) { console.error('Update map error:', e); }
-                return;
-            }
-
             if (!office.lat || !office.lng) return;
 
-            // FIX: cegah race condition — kalau proses init map sedang berjalan,
-            // jangan mulai timer baru lagi (sebelumnya bisa dipanggil dobel dari
-            // setupApp(), refreshData(), dan callback getOfficeLocation hampir
-            // bersamaan, menyebabkan peta gagal render atau div kosong).
-            if (_mapIsInitializing) return;
-
-            if (_mapInitTimer) { clearTimeout(_mapInitTimer); _mapInitTimer = null; }
-            mc.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#64748b;font-size:12px;font-weight:bold;">⏳ Memuat peta...</div>';
-
-            _mapIsInitializing = true;
-            _mapInitTimer = setTimeout(function () {
-                if (userMap) { _mapIsInitializing = false; return; }
-                _mapInitTimer = null;
-                mc.innerHTML  = '';
-
-                try {
-                    var oLat = office.lat, oLng = office.lng, oRad = office.rad;
-
-                    userMap = L.map(mc, {
-                        zoomControl: false,
-                        center: [oLat, oLng],
-                        zoom: 15,
-                        zoomAnimation: false,
-                        fadeAnimation: false,
-                        markerZoomAnimation: false,
-                        inertia: false
-                    });
-                    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                        maxZoom: 19, attribution: '© OpenStreetMap © CARTO'
-                    }).addTo(userMap);
-
-                    var officeIcon = L.divIcon({
-                        className: '',
-                        html: '<div style="font-size:24px;text-shadow:0 2px 4px rgba(0,0,0,0.3);">🏢</div>',
-                        iconSize: [24, 24], iconAnchor: [12, 12]
-                    });
-                    userOfficeMarker = L.marker([oLat, oLng], { icon: officeIcon })
-                        .addTo(userMap).bindPopup('🏢 Titik Kantor');
-
-                    userOfficeCircle = L.circle([oLat, oLng], {
-                        color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.12,
-                        weight: 2, radius: oRad, dashArray: '6 4'
-                    }).addTo(userMap);
-
-                    var userIcon = L.divIcon({
-                        className: '',
-                        html: '<div style="width:14px;height:14px;background:#3b82f6;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(59,130,246,0.3);animation:pulse 2s infinite"></div>',
-                        iconSize: [14, 14], iconAnchor: [7, 7]
-                    });
-                    var posLat = currentLoc.lat !== 0 ? currentLoc.lat : oLat;
-                    var posLng = currentLoc.lng !== 0 ? currentLoc.lng : oLng;
-                    userPosMarker = L.marker([posLat, posLng], { icon: userIcon })
-                        .addTo(userMap).bindPopup('📱 Posisi Anda');
-
-                    userMap.invalidateSize();
-                    requestAnimationFrame(() => { if (userMap) userMap.invalidateSize(); });
-                    setTimeout(() => { if (userMap) { userMap.invalidateSize(); fitMapView(); } }, 300);
-                    setTimeout(() => { if (userMap) userMap.invalidateSize(); }, 800);
-
-                    // FIX: kalau GPS sudah dapat posisi SEBELUM map ini selesai
-                    // dibuat, tandai fix awal sekarang juga supaya tidak ada
-                    // gap di mana auto-center pertama tidak pernah terjadi.
-                    if (!hasInitialGPSFix && (currentLoc.lat !== 0 || currentLoc.lng !== 0)) {
-                        hasInitialGPSFix = true;
-                        centerMapOnUser();
-                    }
-
-                } catch (e) {
-                    console.error('Map Init Error:', e);
-                    mc.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#ef4444;font-size:11px;font-weight:bold;text-align:center;padding:10px;">❌ Gagal memuat peta<br><small>' + e.message + '</small></div>';
-                } finally {
-                    _mapIsInitializing = false;
-                }
-            }, 1500);
+            userMap = true;
+            hasInitialGPSFix = true;
+            renderUserMapUI();
+            updateGPSUI();
         }
 
-        function fitMapView() {
-            if (!userMap) return;
-            var bounds = L.latLngBounds([]);
-            if (userOfficeCircle) bounds.extend(userOfficeCircle.getBounds());
-            if (currentLoc.lat !== 0 && currentLoc.lng !== 0) bounds.extend([currentLoc.lat, currentLoc.lng]);
-            // FIX: animate:false agar konsisten dengan zoomAnimation:false di
-            // konfigurasi peta, mencegah proxy animasi macet di skala ekstrem.
-            if (bounds.isValid()) userMap.fitBounds(bounds, { padding: [25, 25], maxZoom: 18, animate: false });
+        function renderUserMapUI() {
+            const mc = document.getElementById('user-map');
+            if (!mc) return;
+            var dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
+            var inRange = dist <= office.rad;
+            var pct = Math.min(100, Math.round((office.rad / Math.max(dist, 1)) * 100));
+            var barW = Math.min(100, Math.round((office.rad / Math.max(dist, office.rad)) * 100));
+
+            mc.innerHTML = `
+            <div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px;box-sizing:border-box;background:#f8fafc;border-radius:24px;">
+                <div style="font-size:48px;line-height:1;">${inRange ? '✅' : '📍'}</div>
+                <div style="text-align:center;">
+                    <div style="font-size:11px;font-weight:900;color:#6366f1;text-transform:uppercase;letter-spacing:1px;">
+                        ${inRange ? 'DALAM RADIUS KANTOR' : 'LUAR RADIUS KANTOR'}
+                    </div>
+                    <div style="font-size:22px;font-weight:900;color:${inRange ? '#10b981' : '#ef4444'};margin-top:2px;">
+                        ${Math.round(dist)} m
+                    </div>
+                    <div style="font-size:10px;color:#94a3b8;font-weight:600;">dari titik kantor (radius ${office.rad}m)</div>
+                </div>
+                <div style="width:100%;background:#e2e8f0;border-radius:99px;height:8px;overflow:hidden;">
+                    <div style="height:100%;width:${barW}%;background:${inRange ? '#10b981' : '#ef4444'};border-radius:99px;transition:width 0.5s;"></div>
+                </div>
+                ${currentLoc.lat !== 0 ? `<div style="font-size:9px;color:#94a3b8;font-weight:700;">📡 ${currentLoc.lat.toFixed(5)}, ${currentLoc.lng.toFixed(5)}</div>` : '<div style="font-size:9px;color:#94a3b8;">📡 Menunggu sinyal GPS...</div>'}
+            </div>`;
         }
+
+        function fitMapView() { /* tidak dipakai - map diganti UI GPS */ }
 
         function updateUserMapLive() {
-            if (!userMap || !userPosMarker) return;
-            if (currentLoc.lat !== 0 && currentLoc.lng !== 0) {
-                userPosMarker.setLatLng([currentLoc.lat, currentLoc.lng]);
-            }
+            // Update UI GPS card setiap kali posisi berubah
+            if (userMap) renderUserMapUI();
         }
 
         function centerMapOnUser() {
-            if (!userMap) return;
-            userMap.invalidateSize();
-            setTimeout(() => fitMapView(), 100);
+            if (userMap) renderUserMapUI();
         }
 
         function initAdminMap(lat, lng, rad) {
@@ -932,97 +971,31 @@ const izinItems = (res.userPermits || []).map(p => ({
             var mc = document.getElementById('admin-map');
             if (!mc) return;
 
-            if (adminMap) {
-                try { adminMap.remove(); } catch (e) {}
-                adminMap = null;
-            }
-            mc.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:white;font-size:12px;font-weight:bold;">⏳ Memuat peta admin...</div>';
+            // Hanya isi field jika masih kosong (tidak overwrite yang sedang diketik user)
+            var elLat = document.getElementById('adm-lat');
+            var elLng = document.getElementById('adm-lng');
+            var elRad = document.getElementById('adm-rad');
+            if (elLat && !elLat.value) elLat.value = lat.toFixed(6);
+            if (elLng && !elLng.value) elLng.value = lng.toFixed(6);
+            if (elRad && !elRad.value) elRad.value = rad;
 
-            setTimeout(function () {
-                mc.innerHTML = '';
-                try {
-                    // FIX AKAR MASALAH: bug "koordinat ngawur" (misal scale jutaan,
-                    // longitude 458, dst) disebabkan oleh Leaflet zoom-animation
-                    // proxy yang macet di skala ekstrem. Ini terjadi saat
-                    // setView()/zoom dipanggil berulang sebelum animasi zoom
-                    // sebelumnya selesai — terlihat di DevTools sebagai
-                    // "scale(262144)" pada elemen .leaflet-proxy. Solusi: matikan
-                    // semua animasi zoom/pan/marker sejak peta dibuat, supaya
-                    // tidak pernah ada proxy animasi yang bisa macet.
-                    adminMap = L.map(mc, {
-                        zoomControl: false,
-                        center: [lat, lng],
-                        zoom: 17,
-                        zoomAnimation: false,
-                        fadeAnimation: false,
-                        markerZoomAnimation: false,
-                        inertia: false
-                    });
-                    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                        maxZoom: 19, attribution: '© OpenStreetMap © CARTO'
-                    }).addTo(adminMap);
+            var mapsUrl = 'https://www.google.com/maps?q=' + lat + ',' + lng + '&z=17';
+            mc.innerHTML = '<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;box-sizing:border-box;">' +
+                '<div style="font-size:40px;">🏢</div>' +
+                '<div style="text-align:center;">' +
+                    '<div style="font-size:10px;font-weight:900;color:#818cf8;text-transform:uppercase;letter-spacing:1px;">Titik Kantor</div>' +
+                    '<div style="font-size:13px;font-weight:800;color:white;margin-top:4px;">' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</div>' +
+                    '<div style="font-size:10px;color:#94a3b8;margin-top:2px;">Radius: ' + rad + ' meter</div>' +
+                '</div>' +
+                '<a href="' + mapsUrl + '" target="_blank" style="background:#6366f1;color:white;font-size:10px;font-weight:800;padding:8px 20px;border-radius:12px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;">🗺️ Buka di Google Maps</a>' +
+                '<div style="font-size:9px;color:#64748b;text-align:center;">Ubah koordinat: isi Lat/Lng di bawah lalu klik SIMPAN</div>' +
+            '</div>';
 
-                    var adminOfficeIcon = L.divIcon({
-                        className: '',
-                        html: '<div style="font-size:24px;text-shadow:0 2px 4px rgba(0,0,0,0.3);">🏢</div>',
-                        iconSize: [24, 24], iconAnchor: [12, 12]
-                    });
-                    adminMarker = L.marker([lat, lng], { icon: adminOfficeIcon, draggable: true }).addTo(adminMap);
-                    adminCircle = L.circle([lat, lng], {
-                        color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.2, weight: 2, radius: rad
-                    }).addTo(adminMap);
-
-                    document.getElementById('adm-lat').value = lat.toFixed(6);
-                    document.getElementById('adm-lng').value = lng.toFixed(6);
-                    document.getElementById('adm-rad').value = rad;
-
-                    // FIX: validasi rentang sebagai pengaman tambahan (lapis kedua).
-                    // Dengan animasi dimatikan, proyeksi seharusnya selalu benar,
-                    // tapi validasi ini tetap dipertahankan untuk jaga-jaga.
-                    function isValidLatLng(p) {
-                        return p && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180;
-                    }
-
-                    function applyLatLng(p) {
-                        if (!isValidLatLng(p)) {
-                            console.warn('Koordinat di luar rentang, diabaikan:', p);
-                            showToast('Koordinat tidak valid, silakan klik lagi.');
-                            return;
-                        }
-                        adminMarker.setLatLng(p);
-                        adminCircle.setLatLng(p);
-                        document.getElementById('adm-lat').value = p.lat.toFixed(6);
-                        document.getElementById('adm-lng').value = p.lng.toFixed(6);
-                    }
-
-                    adminMarker.on('dragend', function (e) {
-                        applyLatLng(e.target.getLatLng());
-                    });
-
-                    adminMap.on('click', function (e) {
-                        applyLatLng(e.latlng);
-                    });
-
-                    // FIX: HANYA invalidateSize() untuk menstabilkan ukuran —
-                    // TIDAK ADA setView() berulang, karena setView() berulang
-                    // adalah pemicu utama bug scale meledak di atas.
-                    adminMap.invalidateSize();
-                    requestAnimationFrame(function () {
-                        if (adminMap) adminMap.invalidateSize();
-                    });
-                    setTimeout(() => { if (adminMap) adminMap.invalidateSize(); }, 300);
-                    setTimeout(() => { if (adminMap) adminMap.invalidateSize(); }, 800);
-
-                } catch (e) {
-                    console.error('Admin Map Init Error:', e);
-                    mc.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#ef4444;font-size:11px;font-weight:bold;">❌ Gagal memuat peta admin</div>';
-                }
-            }, 500);
+            adminMap = true;
         }
 
         function updateMapCircle() {
-            const r = document.getElementById('adm-rad').value;
-            if (adminCircle) adminCircle.setRadius(parseInt(r) || 0);
+            // Tidak ada circle Leaflet, tidak perlu lakukan apa-apa
         }
 
         function saveGPS() {
@@ -1293,7 +1266,8 @@ const izinItems = (res.userPermits || []).map(p => ({
         }
 
         function showToast(msg) {
-            const t    = document.getElementById('toast');
+            const t = document.getElementById('toast');
+            if (!t) { console.warn('Toast not found:', msg); return; }
             t.innerText = msg;
             t.style.bottom = '110px';
             setTimeout(() => t.style.bottom = '-100px', 3000);
@@ -1309,12 +1283,5 @@ setInterval(function() {
         }
     }
 }, 500);
-  // Hanya izinkan angka, satu titik desimal, dan tanda minus di awal (untuk koordinat negatif)
-function sanitizeNumberInput(val) {
-    val = val.replace(/[^0-9.\-]/g, '');           // buang karakter selain angka, titik, minus
-    val = val.replace(/(?!^)-/g, '');              // minus cuma boleh di posisi paling depan
-    val = val.replace(/(\..*)\./g, '$1');          // cuma boleh satu titik desimal
-    return val;
-}
 
     </script>
