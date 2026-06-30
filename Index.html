@@ -145,13 +145,15 @@
                     <div class="grid grid-cols-2 gap-2">
                         <div class="bg-white/10 p-3 rounded-2xl">
                             <p class="text-[8px] text-gray-400 uppercase font-bold mb-1">Latitude</p>
-                            <input type="text" id="adm-lat" placeholder="Latitude"
+                            <input type="text" id="adm-lat" placeholder="Latitude" inputmode="decimal"
+                                oninput="this.value = sanitizeNumberInput(this.value)"
                                 class="w-full bg-transparent text-xs outline-none text-white font-bold">
                         </div>
                         <div class="bg-white/10 p-3 rounded-2xl">
                             <p class="text-[8px] text-gray-400 uppercase font-bold mb-1">Longitude</p>
-                            <input type="text" id="adm-lng" placeholder="Longitude"
-                                class="w-full bg-transparent text-xs outline-none text-white font-bold">
+                            <input type="text" id="adm-lng" placeholder="Longitude" inputmode="decimal"
+                                  oninput="this.value = sanitizeNumberInput(this.value)"
+                                  class="w-full bg-transparent text-xs outline-none text-white font-bold">
                         </div>
                     </div>
                     <div class="flex gap-2 items-center bg-white/10 p-2 rounded-2xl">
