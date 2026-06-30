@@ -523,24 +523,28 @@ function closeLogoutModal() {
            KAMERA & SELFIE
         ============================================================= */
         function handleAttendanceClick(type, event) {
-    event.preventDefault(); // cegah default dulu di semua kasus
-
     attType = type;
     localStorage.setItem('_attType', type);
+    _permitMode = false; // ← TAMBAH INI — pastikan mode izin tidak aktif
 
     // Guard: skip cek radius jika GPS belum siap
     if (currentLoc.lat !== 0 || currentLoc.lng !== 0) {
         const dist = calculateDist(currentLoc.lat, currentLoc.lng, office.lat, office.lng);
         if (dist > office.rad) {
+            event.preventDefault();
             return showToast("Gagal: Anda berada di luar radius kantor!");
         }
     }
 
     if (window.AppInventor) {
-        window.AppInventor.setWebViewString("openCamera");
+        event.preventDefault();
+        var uid = (typeof currentUser !== 'undefined' && currentUser) ? currentUser.id : 
+          (typeof user !== 'undefined' && user) ? user.id : '';
+window.AppInventor.setWebViewString("openCamera:" + uid);
         return;
     }
 
+    event.preventDefault();
     var inputId = (type === 'IN') ? 'cameraInputMasuk' : 'cameraInputKeluar';
     document.getElementById(inputId).click();
 }
@@ -883,41 +887,27 @@ function closeLogoutModal() {
 // base64Data = string base64 MURNI (tanpa prefix data:image)
 // Pakai window. agar accessible dari EvaluateJS Kodular
     function receivePhoto(base64Data) {
-    if (!attType) {
-        attType = localStorage.getItem('_attType') || 'IN';
-    }
-    
-    if (_permitMode) {
-        _permitMode = false;
-        document.getElementById('pFileData').value = base64Data;
-        document.getElementById('pFileName').value = 'foto_izin.jpg';
-        document.getElementById('pFileLabel').innerText = '✅ Foto berhasil diambil';
-        return;
-    }
-
-    showToast("📷 Foto diterima, memproses...");
-
+    var dataUrl = 'data:image/jpeg;base64,' + base64Data;
+    var can = document.getElementById('canvas');
     var img = new Image();
-    img.onload = function () {
-        var can  = document.getElementById('canvas');
-        var maxW = 400;
+    img.onload = function() {
+        var maxW = 640;
         var scale = (img.width > maxW) ? maxW / img.width : 1;
-        can.width  = Math.round(img.width  * scale);
-        can.height = Math.round(img.height * scale);
+        can.width = img.width * scale;
+        can.height = img.height * scale;
         can.getContext('2d').drawImage(img, 0, 0, can.width, can.height);
-        var compressed = can.toDataURL('image/jpeg', 0.35);
-
-        var sizeKB = Math.round(compressed.length * 0.75 / 1024);
-        if (sizeKB > 3000) {
-            showToast("⚠️ Foto terlalu besar (" + sizeKB + "KB), coba lagi.");
-            return;
-        }
-
-        _sendWithRetry(compressed, 1);
+        var dataUrl2 = can.toDataURL('image/jpeg', 0.6);
+        showToast("📤 Mengirim absensi...");
+        google.script.run
+            .withSuccessHandler(function(res) {
+                showToast(res.message);
+                if (res.success) refreshData();
+            })
+            .withFailureHandler(function() { showToast("Gagal kirim absensi"); })
+            .submitAttendance(attType, currentLoc.lat, currentLoc.lng, user.id, dataUrl2);
     };
-    img.onerror = function () { showToast("❌ Gagal memuat foto, coba lagi."); };
-    img.src = 'data:image/jpeg;base64,' + base64Data;
-};
+    img.src = dataUrl;
+}
 
 function _sendWithRetry(dataUrl, attempt) {
     showToast("📤 Mengirim absensi... mohon tunggu");
@@ -1329,16 +1319,7 @@ function renderAdminIzin(data) {
            UTILITIES
         ============================================================= */
         // Polling WebViewString dari Kodular
-        var _processingPhoto = false;
-setInterval(function() {
-    if (window.AppInventor) {
-        var str = window.AppInventor.getWebViewString();
-        if (str && str !== 'openCamera' && str.length > 100) {
-            window.AppInventor.setWebViewString(''); // ← reset dulu
-            receivePhoto(str); // ← baru proses
-        }
-    }
-}, 500);
+
 
         function calculateDist(l1, ln1, l2, ln2) {
             const R   = 6371e3;
@@ -1380,7 +1361,25 @@ setInterval(function() {
         });
     }, 1000);
 }
-
-
+// Deteksi foto dari Kodular
+var _lastWebStr = '';
+setInterval(function() {
+    if (window.AppInventor) {
+        var str = window.AppInventor.getWebViewString();
+        if (str && str !== _lastWebStr && str !== 'openCamera' && str.length > 100) {
+            _lastWebStr = str;
+            receivePhoto(str);
+        }
+    }
+}, 500);
+setInterval(function() {
+    if (window.AppInventor) {
+        var str = window.AppInventor.getWebViewString();
+        if (str && str !== 'openCamera' && str.length > 100) {
+            window.AppInventor.setWebViewString('');
+            receivePhoto(str);
+        }
+    }
+}, 500);
 
     </script>
