@@ -1309,5 +1309,12 @@ setInterval(function() {
         }
     }
 }, 500);
+  // Hanya izinkan angka, satu titik desimal, dan tanda minus di awal (untuk koordinat negatif)
+function sanitizeNumberInput(val) {
+    val = val.replace(/[^0-9.\-]/g, '');           // buang karakter selain angka, titik, minus
+    val = val.replace(/(?!^)-/g, '');              // minus cuma boleh di posisi paling depan
+    val = val.replace(/(\..*)\./g, '$1');          // cuma boleh satu titik desimal
+    return val;
+}
 
     </script>
